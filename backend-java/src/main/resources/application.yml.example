@@ -1,0 +1,45 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+
+spring:
+  application:
+    name: aiTrade-backend
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url: jdbc:sqlite:./data/aitrade.db
+    username:
+    password:
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+# 本地Python网关（通过cpolar/frp穿透后的公网URL）
+# token 与 gateway-python/.env 中的 GATEWAY_TOKEN 保持一致
+gateway:
+  python:
+    base-url: http://localhost:8000
+    token: REPLACE_WITH_YOUR_GATEWAY_TOKEN
+    timeout-ms: 5000
+
+# JWT 鉴权。secret 必须替换为 >=32 字符的随机字符串；可用 `openssl rand -base64 48` 生成
+jwt:
+  secret: REPLACE_WITH_A_LONG_RANDOM_STRING_AT_LEAST_32_CHARS
+  ttl-seconds: 604800
+
+logging:
+  level:
+    com.aitrade: INFO
+    org.springframework.web: INFO
