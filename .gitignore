@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+gateway-python/logs/
+gateway-python/*.log
+
+# Java
+backend-java/target/
+*.class
+*.jar
+*.war
+hs_err_pid*
+
+# SQLite
+backend-java/data/*.db
+backend-java/data/*.db-journal
+
+# 本地配置（含密钥）
+backend-java/src/main/resources/application.yml
+frontend-vue/.env*.local
+
+# 个人自选股（私密）
+doc/*.sel
+doc/SelfStockInfo.json
+
+# Node
+frontend-vue/node_modules/
+frontend-vue/dist/
+frontend-vue/.vite/
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/settings.local.json
