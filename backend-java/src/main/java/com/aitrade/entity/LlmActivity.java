@@ -23,5 +23,6 @@ public class LlmActivity {
     private String argsJson;
     private String resultJson;
     private String message;
+    private String promptJson;
     private LocalDateTime createdAt;
 }

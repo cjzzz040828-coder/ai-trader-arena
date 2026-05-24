@@ -204,6 +204,46 @@ public class LlmTools {
         }
     }
 
+    public Map<String, Object> getPendingOrders(AiTrader trader, MarketContext ctx, Map<String, Object> args) {
+        List<TradeOrder> orders = tradeOrderMapper.selectList(new QueryWrapper<TradeOrder>()
+                .eq("trader_id", trader.getId())
+                .eq("status", "PENDING")
+                .orderByDesc("created_at"));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (TradeOrder o : orders) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("order_id", o.getId());
+            row.put("code", o.getStockCode());
+            row.put("side", o.getSide());
+            row.put("amount", o.getAmount());
+            row.put("price", o.getPrice() == null ? "?" : o.getPrice().toPlainString());
+            row.put("created_at", o.getCreatedAt() == null ? "?" : o.getCreatedAt().toString());
+            rows.add(row);
+        }
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("count", rows.size());
+        r.put("orders", rows);
+        return r;
+    }
+
+    public Map<String, Object> cancelOrder(AiTrader trader, MarketContext ctx, Map<String, Object> args) {
+        Object idArg = args.get("order_id");
+        if (!(idArg instanceof Number)) return err("order_id 必填且必须是整数");
+        long orderId = ((Number) idArg).longValue();
+        try {
+            OrderVO ord = orderService.cancel(orderId, trader.getUserId());
+            log.info("[strategy-llm-tool] trader {} cancel_order #{} -> ok", trader.getId(), orderId);
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("ok", true);
+            r.put("order_id", ord.getId());
+            r.put("status", ord.getStatus());
+            r.put("message", "订单 #" + orderId + " 已撤销，冻结资金已释放");
+            return r;
+        } catch (Exception e) {
+            return err("撤单失败: " + e.getMessage());
+        }
+    }
+
     // ---------------- helpers ----------------
 
     private static Map<String, Object> err(String msg) {

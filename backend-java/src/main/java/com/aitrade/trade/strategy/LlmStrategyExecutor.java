@@ -6,6 +6,7 @@ import com.aitrade.entity.TradeOrder;
 import com.aitrade.mapper.PositionMapper;
 import com.aitrade.mapper.TradeOrderMapper;
 import com.aitrade.trade.dto.TestLlmResult;
+import com.aitrade.trade.strategy.llm.DecisionMemoryService;
 import com.aitrade.trade.strategy.llm.LlmActivityEvent;
 import com.aitrade.trade.strategy.llm.LlmActivityPublisher;
 import com.aitrade.trade.strategy.llm.LlmCancelRegistry;
@@ -37,12 +38,14 @@ import java.util.Map;
  *
  * 流程：
  *   1. 系统提示 + 初始用户消息（投资策略 + 账户状态 + 持仓 + watchlist 概览 + 最近成交）
- *   2. 暴露 4 个工具：get_stock_analysis / get_minute_chart / get_recent_trades / place_order
+ *   2. 暴露 6 个工具：get_stock_analysis / get_minute_chart / get_recent_trades
+ *      / place_order / get_pending_orders / cancel_order
  *   3. 多轮循环，最多 MAX_ROUNDS=10 次 HTTP 调用
- *   4. LLM 通过 place_order 直接下单（内部走 OrderService，所有防御不变）
+ *   4. LLM 通过 place_order 直接下单（内部走 OrderService，所有防御不变）；
+ *      也可用 cancel_order 撤掉自己的 PENDING 单（释放冻结资金后重新决策）
  *   5. LLM 决定无操作时返回 stop，循环结束
  *
- * 返回空 List<Signal> 是约定：表示"executor 自己处理了下单"，Orchestrator 不再额外下单。
+ * 返回空 List&lt;Signal&gt; 是约定：表示"executor 自己处理了下单"，Orchestrator 不再额外下单。
  */
 @Slf4j
 @Component
@@ -67,6 +70,7 @@ public class LlmStrategyExecutor implements StrategyExecutor {
     private final LlmActivityPublisher activityPublisher;
     private final LlmCancelRegistry cancelRegistry;
     private final LlmInFlightRegistry inFlightRegistry;
+    private final DecisionMemoryService decisionMemoryService;
 
     @Override
     public String strategyType() { return "LLM"; }
@@ -86,11 +90,22 @@ public class LlmStrategyExecutor implements StrategyExecutor {
         }
 
         try {
+            String systemPrompt = buildSystemPrompt();
+            String userPrompt = buildInitialUserMessage(trader, ctx);
+            String promptJson;
+            try {
+                Map<String, String> promptMap = new LinkedHashMap<>();
+                promptMap.put("system", systemPrompt);
+                promptMap.put("user", userPrompt);
+                promptJson = MAPPER.writeValueAsString(promptMap);
+            } catch (Exception e) {
+                promptJson = null;
+            }
             String startMsg = String.format("model=%s, watchlist=%d, prompt=%d字",
                     trader.getLlmModel(),
                     ctx.watchlist().size(),
                     trader.getLlmPrompt() == null ? 0 : trader.getLlmPrompt().length());
-            pub(decisionId, trader, "started", null, null, null, null, null, startMsg);
+            pub(decisionId, trader, "started", null, null, null, null, null, startMsg, promptJson);
 
             if (ctx.watchlist().isEmpty()) {
                 pub(decisionId, trader, "failed", null, null, null, null, null, "watchlist 为空");
@@ -99,8 +114,8 @@ public class LlmStrategyExecutor implements StrategyExecutor {
 
             String url = stripTrailingSlash(trader.getLlmBaseUrl()) + "/v1/chat/completions";
             List<Map<String, Object>> messages = new ArrayList<>();
-            messages.add(msg("system", buildSystemPrompt()));
-            messages.add(msg("user", buildInitialUserMessage(trader, ctx)));
+            messages.add(msg("system", systemPrompt));
+            messages.add(msg("user", userPrompt));
             List<Map<String, Object>> toolsDef = buildToolsDefinition();
 
             int totalToolCalls = 0;
@@ -166,6 +181,9 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                             totalToolCalls, placedOrders, truncate(content, 200));
                     pub(decisionId, trader, "final", round, null, null, null, null,
                             truncate(content, 4000));
+                    if (placedOrders > 0 && content != null && !content.isBlank()) {
+                        decisionMemoryService.updateReason(decisionId, truncate(content, 1000));
+                    }
                     return List.of();
                 }
 
@@ -205,6 +223,16 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                     }
                     if ("place_order".equals(name) && Boolean.TRUE.equals(result.get("ok"))) {
                         placedOrders++;
+                        try {
+                            BigDecimal snapPrice = extractDecisionPrice(argsMap, ctx);
+                            Long orderId = result.get("order_id") instanceof Number
+                                    ? ((Number) result.get("order_id")).longValue() : null;
+                            if (snapPrice != null) {
+                                decisionMemoryService.recordPlace(trader, decisionId, argsMap, orderId, snapPrice, null);
+                            }
+                        } catch (Exception ex) {
+                            log.warn("[strategy] decision-memory record skipped: {}", ex.getMessage());
+                        }
                     }
 
                     String resultJson;
@@ -234,16 +262,26 @@ public class LlmStrategyExecutor implements StrategyExecutor {
             return List.of();
         } finally {
             inFlightRegistry.release(trader.getId());
+            // 清当前 decisionId 的取消标志，避免 cancelledDecisionByTrader 缓慢累积；
+            // clear 只在 traderId 上的标志匹配本 decisionId 时移除，不会误伤后续决策。
+            cancelRegistry.clear(trader.getId(), decisionId);
             activityPublisher.finishDecision(trader.getId(), decisionId);
         }
     }
 
     private void pub(long decisionId, AiTrader trader, String phase, Integer round,
                      String toolName, String toolCallId, String argsJson, String resultJson, String message) {
+        pub(decisionId, trader, phase, round, toolName, toolCallId, argsJson, resultJson, message, null);
+    }
+
+    private void pub(long decisionId, AiTrader trader, String phase, Integer round,
+                     String toolName, String toolCallId, String argsJson, String resultJson, String message,
+                     String promptJson) {
         int seq = activityPublisher.nextSeq(decisionId);
         LlmActivityEvent e = new LlmActivityEvent(
                 trader.getId(), trader.getUserId(), decisionId, seq, phase, round,
                 toolName, toolCallId, argsJson, resultJson, message,
+                promptJson,
                 LocalDateTime.now().toString());
         activityPublisher.publish(e);
     }
@@ -255,8 +293,25 @@ public class LlmStrategyExecutor implements StrategyExecutor {
             case "get_minute_chart" -> tools.getMinuteChart(trader, ctx, args);
             case "get_recent_trades" -> tools.getRecentTrades(trader, ctx, args);
             case "place_order" -> tools.placeOrder(trader, ctx, args);
+            case "get_pending_orders" -> tools.getPendingOrders(trader, ctx, args);
+            case "cancel_order" -> tools.cancelOrder(trader, ctx, args);
             default -> Map.of("ok", false, "error", "unknown tool: " + name);
         };
+    }
+
+    /** 还原 place_order 决策瞬间用到的价格：优先 args.price，缺省走 ctx.priceOf。 */
+    private BigDecimal extractDecisionPrice(Map<String, Object> args, MarketContext ctx) {
+        Object priceArg = args == null ? null : args.get("price");
+        if (priceArg instanceof Number) {
+            return new BigDecimal(priceArg.toString());
+        }
+        if (priceArg instanceof String s && !s.isBlank()) {
+            try {
+                return new BigDecimal(s.trim());
+            } catch (NumberFormatException ignore) { }
+        }
+        String code = args == null ? null : (args.get("code") == null ? null : String.valueOf(args.get("code")));
+        return code == null ? null : ctx.priceOf(code);
     }
 
     // ---------------- prompt 构造 ----------------
@@ -269,12 +324,14 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                 1. 阅读初始信息，按投资策略筛出值得关注的 3~6 只股票。
                 2. 调用 get_stock_analysis(code) / get_minute_chart(code) 查具体数据，必要时 get_recent_trades(limit) 查历史。
                 3. 决策后通过 place_order(code, side, amount, price) 下单；可以连续下多笔。
-                4. 完成后直接给一段简短总结（不再调任何工具），决策结束。
-                5. 如果当前不需要任何操作（例如观望、持仓已合理、非合适买卖点），直接回复一句话说明并结束。
+                4. 如有未成交的 PENDING 单且原决策已不再合理（如行情反转、关键位破位、挂价过远难以成交），可调用 get_pending_orders 查看挂单列表，然后用 cancel_order(order_id) 撤销。撤单会立即释放冻结资金/持仓，撤完即可重新下单。
+                5. 完成后直接给一段简短总结（不再调任何工具），决策结束。
+                6. **观望需要前提**：仅当当前持仓已 ≥ 3 只且每只都健康（无明显风险信号、未到止盈/止损位、技术形态完好）时，才允许回复一句话说明观望理由并结束。否则不允许"看完什么都不做"——必须本轮至少做一笔实际操作（建仓 / 加仓 / 止盈 / 止损 / 调仓换股），按你的策略选最合理的一笔。
 
                 约束：
                 - amount 必须是 100 的整数倍（A 股最小买卖单位）；price 不传会用现价。
                 - 同一股票若已有 PENDING 单不能再下单；T+1：当日买入的股票当日不能卖。
+                - cancel_order 只能撤本 trader 的 PENDING 单（系统已强制校验，撤别人的会报错）。
                 - 同名工具调用不要重复（已查过的 code 别再查）。
                 - 总工具调用不要超过 10 轮，请高效决策。
                 - 中文交流；reason 字段或最终总结说明你做出该决策的依据。
@@ -288,7 +345,11 @@ public class LlmStrategyExecutor implements StrategyExecutor {
         StringBuilder sb = new StringBuilder();
         sb.append("# 投资策略\n");
         sb.append(isBlank(trader.getLlmPrompt())
-                ? "（未填写，请按通用稳健策略：均线趋势 + 适度仓位 + 回避高估值。）"
+                ? "（未填写专属策略，请按以下默认目标交易）\n"
+                + "- 目标持仓：3~5 只活跃股，单只仓位 ≤ 30%；现金留存 10~20%。\n"
+                + "- **建仓优先**：当前若空仓或持仓不足 3 只，本轮必须从 watchlist 中至少选 1 只买入建仓，不要光看不下手。\n"
+                + "- 风格偏好：日内趋势 + 均线突破；单笔盈利 5~8% 考虑止盈，亏损 3~5% 考虑止损。\n"
+                + "- 风控红线：不追涨停 / 跌停股、不重仓 ST 票、不在尾盘 14:50 后开新仓。"
                 : trader.getLlmPrompt().trim());
 
         sb.append("\n\n# 账户状态\n");
@@ -350,6 +411,11 @@ public class LlmStrategyExecutor implements StrategyExecutor {
         }
 
         sb.append("\n请按你的策略思考并通过工具完成本轮决策。");
+
+        String memorySummary = decisionMemoryService.formatRecentSummary(trader.getId(), 30);
+        if (memorySummary != null && !memorySummary.isEmpty()) {
+            sb.append(memorySummary);
+        }
         return sb.toString();
     }
 
@@ -388,6 +454,22 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                                         "price", Map.of("type", "number", "description", "限价（可选，默认现价）")
                                 ),
                                 "required", List.of("code", "side", "amount")
+                        )),
+                fnTool("get_pending_orders",
+                        "查询本 trader 当前所有未成交（PENDING）的挂单，返回 order_id / code / side / amount / price / created_at。撤单前先用此工具拿到 order_id。",
+                        Map.of(
+                                "type", "object",
+                                "properties", Map.of(),
+                                "required", List.of()
+                        )),
+                fnTool("cancel_order",
+                        "撤销本 trader 的一笔 PENDING 单，撤单成功会立即释放冻结资金/持仓。只能撤本 trader 的 PENDING 单（系统强制校验）。",
+                        Map.of(
+                                "type", "object",
+                                "properties", Map.of(
+                                        "order_id", Map.of("type", "integer", "description", "待撤销的订单 ID（必须是本 trader 的 PENDING 单）")
+                                ),
+                                "required", List.of("order_id")
                         ))
         );
     }

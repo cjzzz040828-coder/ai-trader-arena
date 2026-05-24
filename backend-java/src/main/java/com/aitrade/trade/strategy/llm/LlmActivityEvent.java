@@ -23,5 +23,6 @@ public record LlmActivityEvent(
         String argsJson,
         String resultJson,
         String message,
+        String promptJson,
         String createdAt
 ) {}

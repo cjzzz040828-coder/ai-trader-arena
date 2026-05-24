@@ -11,6 +11,7 @@ import com.aitrade.trade.strategy.llm.LlmInFlightRegistry;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -62,6 +63,7 @@ public class LlmActivityController {
                 publisher.nextSeq(decisionId),
                 "cancel_requested", null, null, null, null, null,
                 "已发送停止请求，等待当前轮结束",
+                null,
                 LocalDateTime.now().toString());
         publisher.publish(ev);
         r.put("requested", true);
@@ -87,5 +89,16 @@ public class LlmActivityController {
         // 前端按 id 升序渲染：这里反转
         java.util.Collections.reverse(rows);
         return rows;
+    }
+
+    /** 清空某 trader 的全部 LLM 活动记录（不可恢复）。进行中的决策不会被中断，剩余事件仍会产生。 */
+    @DeleteMapping("/llm-activities")
+    public Map<String, Object> clearActivities(@PathVariable Long traderId, @CurrentUser Long userId) {
+        traderService.getOwned(traderId, userId);
+        int deleted = publisher.clearForTrader(traderId, userId);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("deleted", deleted);
+        r.put("traderId", traderId);
+        return r;
     }
 }
