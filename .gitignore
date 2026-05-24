@@ -19,6 +19,9 @@ hs_err_pid*
 backend-java/data/*.db
 backend-java/data/*.db-journal
 
+# 选股池运行时数据（用户配置 + 池子快照）
+gateway-python/data/
+
 # 本地配置（含密钥）
 backend-java/src/main/resources/application.yml
 frontend-vue/.env*.local
@@ -42,3 +45,4 @@ Thumbs.db
 
 # Claude Code
 .claude/settings.local.json
+.mcp.json

@@ -28,7 +28,7 @@
 
 ### 0. 准备
 - **Python 3.10+**、**JDK 17**、**Node 18+**、**Maven 3.6+** 已安装。
-- **自选股**：在同花顺 PC 客户端里"自选股 → 导出"得到 `.sel` 文件，放到 `doc/自选股.sel`（路径可在 `gateway-python/app/config.py` 的 `ths_sel_export_path` 改）。仅启动前做一次即可，运行时不需要同花顺常驻。
+- **自选股**：在同花顺 PC 客户端里"自选股 → 导出"得到 `.sel` 文件，放到 `doc/自选股.sel`（路径可在 `gateway-python/app/config.py` 的 `ths_sel_export_path` 改）。仅启动前做一次即可，运行时不需要同花顺常驻。如需按周/主题维护多组选股，在 `.env` 设 `THS_SEL_EXTRA_PATHS=doc/5.4.sel,doc/6.1.sel`（默认已包含 `doc/5.4.sel`），每个文件作为独立分组（文件名 stem 作组名，前端 Dashboard 左栏可切换）。
 - 推荐安装 [cpolar](https://www.cpolar.com/)（内网穿透，云端部署 Java 时需要）。
 
 ### 1. 启 Python 网关
@@ -80,7 +80,7 @@ cpolar http 8000
 - **网关Token**：cpolar URL 是公网可达的，务必改 `GATEWAY_TOKEN`，否则会被爆刷。
 - **不要高频请求 mootdx**：客户端已是全局单例 + TTL缓存（默认1秒），通达信不喜欢密集请求。
 - **非交易时段**：通达信会返回空，已自动走 fallback 缓存或返回 `market_status=CLOSED`。
-- **自选股 .sel 文件**：从同花顺导出，比读 stockblock.ini 完整（后者部分分组加密）。换股票池时重新导出并 `GET /watchlist/reload`。
+- **自选股 .sel 文件**：从同花顺导出，比读 stockblock.ini 完整（后者部分分组加密）。换股票池时重新导出并 `GET /watchlist/reload`。支持多 `.sel` 并存为分组（主文件 + `THS_SEL_EXTRA_PATHS`），全集去重合并。
 - **资金守恒不变量**：`balance + frozen_balance + Σ(amount × current_price) == 1_000_000 + total_profit`。改动账逻辑时务必保持等式成立。
 - **bash 里跑不了 npm**：Claude/Git-bash 的 PATH 没有 node，前端启动用 cmd。
 
@@ -101,5 +101,9 @@ cpolar http 8000
 ### 阶段三·研究与可解释
 - [x] 回测系统（MA 策略，T+1 open 撮合，日 K 切片）
 - [x] LLM trader 实时活动监控面板（SSE 推送决策过程 + 中断按钮 + 历史持久化）
-- [ ] LLM 策略回测（成本考量未做，`ToolBox` 抽象接口已预留）
-- [ ] 更丰富的回测指标（夏普/年化/胜率）
+- [x] LLM 决策落库 + 4 小时后验反思（DecisionMemory + ReflectionWorker，过去 30 天准确率喂回 prompt 实现自我校准）
+- [x] 专业回测报告（夏普/索提诺/Calmar/年化/胜率/盈亏比 + 沪深300 基准对比 + 月度收益热力图，独立报告页 `/backtest/:id`）
+- [x] 策略超市（官方模板库 → 一键派生 trader，含 MA/LLM 模板）
+- [x] 多 .sel 自选股分组（按周/按主题维护多组选股，前端 Dashboard 左栏可切换）
+- [ ] LLM 策略回测（成本 + 历史数据泄漏权衡，`ToolBox` 抽象接口已预留；探索中的方向：用"决策回放"绕过重复调模型成本）
+- [ ] LLM × MA 信号融合（把回测验证过的 MA 参数注入 LLM trader prompt 作"专家信号"参考）

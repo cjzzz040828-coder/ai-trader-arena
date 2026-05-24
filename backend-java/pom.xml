@@ -79,6 +79,13 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- SCRIPT 策略：JavaScript 沙箱执行（JDK 11 后 Nashorn 从 JDK 移除，用社区维护的独立 jar） -->
+        <dependency>
+            <groupId>org.openjdk.nashorn</groupId>
+            <artifactId>nashorn-core</artifactId>
+            <version>15.4</version>
+        </dependency>
     </dependencies>
 
     <build>
