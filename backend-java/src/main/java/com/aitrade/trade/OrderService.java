@@ -18,8 +18,6 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
 
 @Service
 @RequiredArgsConstructor
@@ -29,24 +27,11 @@ public class OrderService {
     private final PositionMapper positionMapper;
     private final TradeOrderMapper tradeOrderMapper;
     private final TraderService traderService;
-
-    /**
-     * 每个 trader 一把锁。
-     * 防止用户手动下单和策略调度同时修改同一个 trader 的 balance/frozen，
-     * 破坏资金守恒：balance + frozen_balance + Σ持仓市值 == 1_000_000 + total_profit。
-     */
-    private final ConcurrentHashMap<Long, Object> traderLocks = new ConcurrentHashMap<>();
-
-    private <T> T withTraderLock(Long traderId, Supplier<T> action) {
-        Object lock = traderLocks.computeIfAbsent(traderId, k -> new Object());
-        synchronized (lock) {
-            return action.get();
-        }
-    }
+    private final TraderLockRegistry lockRegistry;
 
     @Transactional
     public OrderVO place(PlaceOrderReq req, Long userId) {
-        return withTraderLock(req.getTraderId(), () -> placeLocked(req, userId));
+        return lockRegistry.withLock(req.getTraderId(), () -> placeLocked(req, userId));
     }
 
     private OrderVO placeLocked(PlaceOrderReq req, Long userId) {
@@ -92,7 +77,7 @@ public class OrderService {
     public OrderVO cancel(Long orderId, Long userId) {
         TradeOrder order = tradeOrderMapper.selectById(orderId);
         if (order == null) throw new ApiException(404, "订单不存在");
-        return withTraderLock(order.getTraderId(), () -> cancelLocked(order, userId));
+        return lockRegistry.withLock(order.getTraderId(), () -> cancelLocked(order, userId));
     }
 
     private OrderVO cancelLocked(TradeOrder order, Long userId) {
@@ -113,7 +98,7 @@ public class OrderService {
      */
     @Transactional
     public int cancelAllPending(Long traderId, Long userId) {
-        return withTraderLock(traderId, () -> {
+        return lockRegistry.withLock(traderId, () -> {
             AiTrader trader = traderService.getOwned(traderId, userId);
             List<TradeOrder> pending = tradeOrderMapper.selectList(new QueryWrapper<TradeOrder>()
                     .eq("trader_id", traderId).eq("status", "PENDING"));

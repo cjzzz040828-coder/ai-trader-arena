@@ -23,7 +23,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private static final AntPathMatcher MATCHER = new AntPathMatcher();
     private static final List<String> WHITELIST = List.of(
             "/api/auth/register",
-            "/api/auth/login"
+            "/api/auth/login",
+            // 健康检查接口对外探活用，与 README 中"不带 token 也能调"的承诺一致；
+            // 转发的是 Python 网关 /health 状态（mootdx_ready / market_status / 服务器时间），
+            // 不含业务数据，所以放行安全。
+            "/api/quote/gateway-health"
     );
 
     private final JwtUtil jwtUtil;
@@ -40,7 +44,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         String header = req.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
             token = header.substring(7);
-        } else if (req.getRequestURI().endsWith("/llm-stream")) {
+        } else if (isSseEndpoint(req.getRequestURI())) {
             // SSE：EventSource 无法加自定义 header，仅对 SSE 端点 fallback 到 query string
             String qt = req.getParameter("token");
             if (qt != null && !qt.isBlank()) token = qt;
@@ -66,6 +70,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             if (MATCHER.match(p, uri)) return true;
         }
         return false;
+    }
+
+    /** SSE 端点路径白名单：这些端点允许通过 ?token= query 鉴权（EventSource 无法加 header）。 */
+    private static boolean isSseEndpoint(String uri) {
+        return uri.endsWith("/llm-stream")
+                || uri.endsWith("/llm-activity/stream");
     }
 
     private void writeUnauthorized(HttpServletResponse res, String msg) throws IOException {

@@ -40,6 +40,7 @@ public class MatchEngine {
     private final PositionMapper positionMapper;
     private final AiTraderMapper aiTraderMapper;
     private final PythonGatewayClient gateway;
+    private final TraderLockRegistry lockRegistry;
 
     public void tick() {
         List<TradeOrder> pending = tradeOrderMapper.selectList(
@@ -72,7 +73,12 @@ public class MatchEngine {
             BigDecimal latest = priceMap.get(o.getStockCode());
             if (latest == null || latest.signum() <= 0) continue;
             try {
-                fillOrderInNewTx(o.getId(), latest);
+                final Long orderId = o.getId();
+                final BigDecimal price = latest;
+                // 共享 TraderLockRegistry：与 OrderService.place/cancel 互斥，
+                // 防止"撮合 fillOrder"和"用户/LLM 撤单"并发改 trader.balance/frozen，
+                // 破坏资金守恒不变量。
+                lockRegistry.withLockVoid(o.getTraderId(), () -> fillOrderInNewTx(orderId, price));
             } catch (Exception e) {
                 log.error("[match] fill order {} failed: {}", o.getId(), e.getMessage(), e);
             }
