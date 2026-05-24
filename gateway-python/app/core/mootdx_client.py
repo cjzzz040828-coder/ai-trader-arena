@@ -41,6 +41,12 @@ STOCK_NAMES: dict[str, str] = {
     "601988": "中国银行", "603259": "药明康德", "688981": "中芯国际",
 }
 
+# 全市场 A 股名表（由 _load_stock_names 后台填充）。结构：[{code, name, market}, ...]
+# market: "SH" / "SZ"，按代码段判断（沪市=5/6/9开头，其余视为深市）。
+# 一旦填充后只读，可被 selfstock.filter 模式直接消费。
+ALL_MARKET_STOCKS: list[dict] = []
+_all_stocks_lock = threading.Lock()
+
 
 def _detect_market(code: str) -> int:
     """0=深市, 1=沪市。沪市规则：6/9/5开头，深市：0/2/3开头。"""
@@ -122,22 +128,29 @@ class MootdxClient:
                 backoff = min(backoff * 2, settings.reconnect_max_backoff_seconds)
 
     def _load_stock_names(self) -> None:
-        """从 mootdx 拉全市场股票名表，扩充 STOCK_NAMES 字典。"""
+        """从 mootdx 拉全市场股票名表，扩充 STOCK_NAMES 字典 + 填充 ALL_MARKET_STOCKS。"""
         try:
             with self._client_lock:
                 df_sz = self._client.stocks(market=0)
                 df_sh = self._client.stocks(market=1)
+            collected: list[dict] = []
             count = 0
-            for df in (df_sz, df_sh):
+            for df, market_tag in ((df_sz, "SZ"), (df_sh, "SH")):
                 if df is None or df.empty:
                     continue
                 for _, row in df.iterrows():
                     code = str(row.get("code", "")).zfill(6)
                     name = str(row.get("name", "")).strip()
-                    if code and name and code not in STOCK_NAMES:
+                    if not code or not code.isdigit():
+                        continue
+                    if name and code not in STOCK_NAMES:
                         STOCK_NAMES[code] = name
                         count += 1
-            logger.info(f"[mootdx] loaded {count} stock names, total={len(STOCK_NAMES)}")
+                    collected.append({"code": code, "name": name or code, "market": market_tag})
+            with _all_stocks_lock:
+                ALL_MARKET_STOCKS.clear()
+                ALL_MARKET_STOCKS.extend(collected)
+            logger.info(f"[mootdx] loaded {count} new names, total names={len(STOCK_NAMES)}, all_market_stocks={len(ALL_MARKET_STOCKS)}")
         except Exception as e:
             logger.warning(f"[mootdx] load_stock_names error: {e}")
 

@@ -25,13 +25,125 @@ from typing import Optional
 from loguru import logger
 
 from app.config import settings
-from app.core.mootdx_client import STOCK_NAMES
+from app.core.mootdx_client import ALL_MARKET_STOCKS, STOCK_NAMES
 
 _cache: list[dict] | None = None
 _cache_mtime: float = 0
 _cache_groups: dict[str, list[str]] = {}
 
 CODE_PATTERN = re.compile(r'\b(33|17):(\d{6})\b')
+
+
+def _classify_market_segment(code: str) -> str | None:
+    """根据 6 位代码判定板块。返回 settings.filter_markets_set 里的标签或 None（非主流 A 股）。
+
+    沪市：600/601/603/605 → 主板；688 → 科创板
+    深市：000 → 主板；002 → 中小板；300 → 创业板
+    其它（83/87/8/4/9 等）= 北交所/B 股/其它，本期不接入
+    """
+    if not code or len(code) != 6 or not code.isdigit():
+        return None
+    p2 = code[:2]
+    p3 = code[:3]
+    if p3 in ("600", "601", "603", "605"):
+        return "MAIN_SH"
+    if p3 == "688":
+        return "STAR"
+    if p3 == "000":
+        return "MAIN_SZ"
+    if p3 == "002":
+        return "SME"
+    if p3 == "300":
+        return "GEM"
+    if p2 == "00":  # 00 开头但非 002/000 的少数情况，统归深市主板
+        return "MAIN_SZ"
+    return None
+
+
+def _is_excluded_by_name(name: str) -> bool:
+    """名称命中 ST / *ST / 退 等风险标记则排除。"""
+    if not name:
+        return False
+    upper = name.upper()
+    if settings.filter_exclude_st and ("ST" in upper):
+        return True
+    if settings.filter_exclude_delisting and ("退" in name):
+        return True
+    return False
+
+
+def _load_by_filter() -> tuple[list[dict], dict[str, list[str]]]:
+    """从 mootdx 全市场名表按 settings 配置的规则筛选。返回 (records, groups)。
+
+    若 mootdx 名表还没加载完（_load_stock_names 是后台线程），返回空让上层回退到 sel。
+    """
+    if not ALL_MARKET_STOCKS:
+        logger.warning("[selfstock] filter mode: ALL_MARKET_STOCKS not loaded yet")
+        return [], {}
+
+    markets_keep = settings.filter_markets_set
+    max_count = max(0, int(settings.filter_max_count or 0))
+
+    matched: list[dict] = []
+    groups_by_segment: dict[str, list[str]] = {}
+    for s in ALL_MARKET_STOCKS:
+        code = s.get("code", "")
+        name = s.get("name") or STOCK_NAMES.get(code, code)
+        seg = _classify_market_segment(code)
+        if not seg or seg not in markets_keep:
+            continue
+        if _is_excluded_by_name(name):
+            continue
+        matched.append({
+            "code": code,
+            "name": name,
+            "market": "SH" if code[0] in ("5", "6", "9") else "SZ",
+            "added_price": 0,
+            "added_date": "",
+            "_segment": seg,
+        })
+
+    # 按代码升序稳定排序后截断
+    matched.sort(key=lambda r: r["code"])
+    if max_count and len(matched) > max_count:
+        matched = matched[:max_count]
+
+    for r in matched:
+        seg = r.pop("_segment")
+        groups_by_segment.setdefault(seg, []).append(r["code"])
+    logger.info(
+        f"[selfstock] filter mode: {len(matched)} stocks, "
+        f"segments=" + ", ".join(f"{k}:{len(v)}" for k, v in groups_by_segment.items())
+    )
+    return matched, groups_by_segment
+
+
+def _load_by_pool(pool_name: str | None = None) -> tuple[list[dict], dict[str, list[str]]]:
+    """读 data/pools/{name}.json，转成 watchlist 记录格式。文件不存在/为空时返回 (空, 空) 让上层回退。
+
+    pool_name=None 时走 default 池。
+    """
+    from app.core.dynamic_pool import load_pool  # 延迟 import 避免循环
+    name = pool_name or "default"
+    data = load_pool(name)
+    if not data or not data.get("codes"):
+        logger.warning(f"[selfstock] pool '{name}' empty/missing")
+        return [], {}
+    records: list[dict] = []
+    for s in data["codes"]:
+        code = s.get("code", "")
+        if not code:
+            continue
+        records.append({
+            "code": code,
+            "name": s.get("name") or STOCK_NAMES.get(code, code),
+            "market": s.get("market") or ("SH" if code[0] in ("5", "6", "9") else "SZ"),
+            "added_price": s.get("price", 0),
+            "added_date": (data.get("updated_at") or "")[:10],
+        })
+    groups = {name: [r["code"] for r in records]}
+    logger.info(f"[selfstock] pool '{name}' loaded {len(records)} stocks (updated_at={data.get('updated_at')})")
+    return records, groups
 
 
 def _resolve_ths_user_dir() -> Optional[Path]:
@@ -130,11 +242,57 @@ def _parse_selfstock_json(path: Path) -> list[dict]:
     return result
 
 
-def load_selfstock(force: bool = False) -> list[dict]:
-    """主入口：返回完整自选股列表 [{code, name, market, added_price, added_date}, ...]"""
+def load_selfstock(force: bool = False, pool_name: str | None = None) -> list[dict]:
+    """主入口：返回完整自选股列表 [{code, name, market, added_price, added_date}, ...]
+
+    三种模式（settings.watchlist_mode）：
+      sel    : 从 .sel 文件 / stockblock.ini / SelfStockInfo.json 解析（默认）
+      filter : 从 mootdx 全市场名表按规则筛选（板块代码段 + 去 ST/退市 + 截断到 N 只）
+      pool   : 从 data/pools/{pool_name}.json 读"打板候选池"
+               pool_name 显式传入时无视全局 watchlist_mode 直接走 pool 模式
+               文件缺失或为空时回退到 sel 模式
+    """
     global _cache, _cache_mtime, _cache_groups
 
+    mode = (settings.watchlist_mode or "sel").lower()
+    # 调用方显式传 pool_name 时直接进 pool 模式（不要被全局 mode 限制 — 多 trader 各绑各池）
+    if pool_name is not None:
+        records, groups = _load_by_pool(pool_name)
+        if records:
+            return records
+        logger.info(f"[selfstock] pool '{pool_name}' empty, fallback to sel sources")
+        # 注意：显式池子模式下 fallback 后不写缓存，避免污染默认 watchlist 缓存
+
+    # ---- pool 模式（默认 default 池）----
+    if mode == "pool":
+        records, groups = _load_by_pool(None)
+        if records:
+            new_mtime = float(len(records))
+            if not force and _cache is not None and _cache_mtime == new_mtime:
+                return _cache
+            _cache = records
+            _cache_mtime = new_mtime
+            _cache_groups = groups
+            return records
+        logger.info("[selfstock] default pool empty, fallback to sel sources")
+
+    # ---- filter 模式：直接从全市场名表筛 ----
+    if mode == "filter":
+        records, groups = _load_by_filter()
+        if records:
+            # filter 模式的"mtime"用名表长度做版本号即可：名表更新会自动反映
+            new_mtime = float(len(records))
+            if not force and _cache is not None and _cache_mtime == new_mtime:
+                return _cache
+            _cache = records
+            _cache_mtime = new_mtime
+            _cache_groups = groups
+            return records
+        logger.info("[selfstock] filter mode empty, fallback to sel sources")
+
+    # ---- sel 模式（默认）----
     sel_path = Path(settings.ths_sel_export_path)
+    extra_paths = settings.sel_extra_paths_list
     user_dir = _resolve_ths_user_dir()
 
     stockblock_path = (user_dir / "stockblock.ini") if user_dir else None
@@ -143,6 +301,9 @@ def load_selfstock(force: bool = False) -> list[dict]:
     mtimes = []
     if sel_path.exists():
         mtimes.append(sel_path.stat().st_mtime)
+    for p in extra_paths:
+        if p.exists():
+            mtimes.append(p.stat().st_mtime)
     if stockblock_path and stockblock_path.exists():
         mtimes.append(stockblock_path.stat().st_mtime)
     if selfstock_path and selfstock_path.exists():
@@ -164,25 +325,41 @@ def load_selfstock(force: bool = False) -> list[dict]:
         except Exception as e:
             logger.warning(f"[selfstock] read SelfStockInfo.json failed: {e}")
 
-    all_codes: list[str] = []
     groups: dict[str, list[str]] = {}
 
-    # 数据源 1：.sel 导出文件（覆盖全分组）
+    # 数据源 1：.sel 主文件 + 额外 .sel 文件，各自作为独立分组
+    sel_files: list[Path] = []
     if sel_path.exists():
-        try:
-            all_codes = _parse_sel_file(sel_path)
-            groups = {"SEL_EXPORT": all_codes}
-            logger.info(f"[selfstock] .sel export: {len(all_codes)} stocks ({sel_path})")
-        except Exception as e:
-            logger.warning(f"[selfstock] read .sel failed: {e}")
+        sel_files.append(sel_path)
+    for p in extra_paths:
+        if p.exists() and p.resolve() != sel_path.resolve():
+            sel_files.append(p)
 
-    # 数据源 2：stockblock.ini
-    if not all_codes and stockblock_path and stockblock_path.exists():
+    for p in sel_files:
         try:
-            all_codes, groups = _parse_stockblock_ini(stockblock_path)
-            logger.info(f"[selfstock] stockblock.ini: {len(all_codes)} unique stocks across {len(groups)} groups")
+            codes = _parse_sel_file(p)
+            groups[p.stem] = codes
+            logger.info(f"[selfstock] {p.name}: {len(codes)} stocks")
+        except Exception as e:
+            logger.warning(f"[selfstock] read {p} failed: {e}")
+
+    # 数据源 2：stockblock.ini（仅在没有任何 .sel 时回退）
+    if not groups and stockblock_path and stockblock_path.exists():
+        try:
+            _, ini_groups = _parse_stockblock_ini(stockblock_path)
+            groups = ini_groups
+            logger.info(f"[selfstock] stockblock.ini: {sum(len(v) for v in groups.values())} stocks across {len(groups)} groups")
         except Exception as e:
             logger.warning(f"[selfstock] read stockblock.ini failed: {e}")
+
+    # 跨组去重合并，保持首次出现顺序
+    seen: set[str] = set()
+    all_codes: list[str] = []
+    for codes in groups.values():
+        for c in codes:
+            if c not in seen:
+                seen.add(c)
+                all_codes.append(c)
 
     # 兜底：用 SelfStockInfo.json 的代码
     if not all_codes and extra:

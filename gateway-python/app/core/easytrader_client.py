@@ -1,7 +1,12 @@
 """
 easytrader 同花顺PC客户端封装。
 
-避坑要点：
+【已退役】阶段二改为 Java 端虚拟撮合（见 backend-java 的 OrderService + MatchEngine），
+本模块及 /trade/* /account/* 路由不再被 Java 后端调用，requirements.txt 已移除 easytrader。
+保留代码供未来真实下单链路回滚参考；connect() 时 import easytrader 失败已 try/except 兜底，
+不会影响行情通道。
+
+避坑要点（如重新启用）：
 1. 全局单例，避免重复 connect 导致窗口被多份控制
 2. 每次 buy/sell/cancel 之前强制 refresh + active_window
 3. 所有调用 try/except，记录详细日志，预留 alert_hook

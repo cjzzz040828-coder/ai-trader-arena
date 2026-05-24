@@ -1,3 +1,5 @@
+import secrets
+
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
@@ -15,6 +17,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         token = request.headers.get("X-Gateway-Token", "")
-        if token != settings.gateway_token:
+        # 常量时间比较，防 timing-attack 探测 token 前缀
+        if not secrets.compare_digest(token, settings.gateway_token):
             return JSONResponse(status_code=401, content={"detail": "invalid gateway token"})
         return await call_next(request)
