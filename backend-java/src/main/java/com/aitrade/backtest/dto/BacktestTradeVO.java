@@ -10,10 +10,12 @@ public class BacktestTradeVO {
     private Long id;
     private String tradeDate;
     private String stockCode;
+    private String stockName;
     private String side;
     private Integer amount;
     private BigDecimal price;
     private BigDecimal balanceAfter;
+    private BigDecimal costPrice;
     private String reason;
 
     public static BacktestTradeVO from(BacktestTrade t) {
@@ -21,10 +23,12 @@ public class BacktestTradeVO {
         v.id = t.getId();
         v.tradeDate = t.getTradeDate();
         v.stockCode = t.getStockCode();
+        v.stockName = t.getStockName();
         v.side = t.getSide();
         v.amount = t.getAmount();
         v.price = t.getPrice();
         v.balanceAfter = t.getBalanceAfter();
+        v.costPrice = t.getCostPrice();
         v.reason = t.getReason();
         return v;
     }

@@ -31,6 +31,15 @@ public class BacktestTask {
     private BigDecimal maxDrawdownPct;
     private String equityCurveJson;
 
+    private BigDecimal sharpeRatio;
+    private BigDecimal sortinoRatio;
+    private BigDecimal calmarRatio;
+    private BigDecimal annualReturnPct;
+    private BigDecimal winRatePct;
+    private BigDecimal profitLossRatio;
+    private String benchmarkCurveJson;
+    private String monthlyReturnsJson;
+
     private LocalDateTime createdAt;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;

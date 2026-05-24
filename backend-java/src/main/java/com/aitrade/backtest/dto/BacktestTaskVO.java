@@ -26,6 +26,15 @@ public class BacktestTaskVO {
     private BigDecimal maxDrawdownPct;
     private String equityCurveJson;
 
+    private BigDecimal sharpeRatio;
+    private BigDecimal sortinoRatio;
+    private BigDecimal calmarRatio;
+    private BigDecimal annualReturnPct;
+    private BigDecimal winRatePct;
+    private BigDecimal profitLossRatio;
+    private String benchmarkCurveJson;
+    private String monthlyReturnsJson;
+
     private LocalDateTime createdAt;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
@@ -48,6 +57,14 @@ public class BacktestTaskVO {
         v.totalTrades = t.getTotalTrades();
         v.maxDrawdownPct = t.getMaxDrawdownPct();
         v.equityCurveJson = t.getEquityCurveJson();
+        v.sharpeRatio = t.getSharpeRatio();
+        v.sortinoRatio = t.getSortinoRatio();
+        v.calmarRatio = t.getCalmarRatio();
+        v.annualReturnPct = t.getAnnualReturnPct();
+        v.winRatePct = t.getWinRatePct();
+        v.profitLossRatio = t.getProfitLossRatio();
+        v.benchmarkCurveJson = t.getBenchmarkCurveJson();
+        v.monthlyReturnsJson = t.getMonthlyReturnsJson();
         v.createdAt = t.getCreatedAt();
         v.startedAt = t.getStartedAt();
         v.finishedAt = t.getFinishedAt();

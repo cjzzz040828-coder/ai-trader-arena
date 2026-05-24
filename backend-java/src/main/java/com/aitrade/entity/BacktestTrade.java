@@ -15,9 +15,11 @@ public class BacktestTrade {
     private Long taskId;
     private String tradeDate;
     private String stockCode;
+    private String stockName;
     private String side;
     private Integer amount;
     private BigDecimal price;
     private BigDecimal balanceAfter;
+    private BigDecimal costPrice;
     private String reason;
 }

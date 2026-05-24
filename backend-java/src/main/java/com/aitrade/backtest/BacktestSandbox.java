@@ -63,6 +63,46 @@ public class BacktestSandbox {
         return true;
     }
 
+    /**
+     * 即时成交（LLM 决策回放专用）。不入 pending 队列，直接落账。
+     *   - BUY: balance 直接扣，positions 增持，code 进 todayBuys（A 股 T+1，当日买入次日才能卖）
+     *   - SELL: 持仓直接减，balance 直接加；若 boughtToday 拒绝；持仓不足拒绝
+     * 跟 enqueueBuy/Sell + settleAtOpen 链路并存，但**不要混用**——LlmReplayEngine 整条主循环
+     * 走即时成交，没有 pending 单。
+     */
+    public Fill executeImmediate(String code, String side, int amount, BigDecimal price) {
+        if (code == null || side == null || price == null || price.signum() <= 0 || amount <= 0) return null;
+        if ("BUY".equalsIgnoreCase(side)) {
+            BigDecimal cost = price.multiply(BigDecimal.valueOf(amount));
+            if (balance.compareTo(cost) < 0) return null;
+            balance = balance.subtract(cost);
+            Pos pos = positions.get(code);
+            if (pos == null) {
+                positions.put(code, new Pos(amount, price));
+            } else {
+                BigDecimal oldVal = pos.costPrice.multiply(BigDecimal.valueOf(pos.amount));
+                BigDecimal newVal = price.multiply(BigDecimal.valueOf(amount));
+                int newAmt = pos.amount + amount;
+                pos.costPrice = oldVal.add(newVal).divide(BigDecimal.valueOf(newAmt), 3, RoundingMode.HALF_UP);
+                pos.amount = newAmt;
+            }
+            todayBuys.add(code);
+            return new Fill(code, "BUY", amount, price, balance, null);
+        }
+        if ("SELL".equalsIgnoreCase(side)) {
+            if (todayBuys.contains(code)) return null;
+            Pos pos = positions.get(code);
+            if (pos == null || pos.amount < amount) return null;
+            BigDecimal costPriceAtSell = pos.costPrice;
+            pos.amount -= amount;
+            if (pos.amount == 0) positions.remove(code);
+            BigDecimal income = price.multiply(BigDecimal.valueOf(amount));
+            balance = balance.add(income);
+            return new Fill(code, "SELL", amount, price, balance, costPriceAtSell);
+        }
+        return null;
+    }
+
     /** 用 fillDate（次日）的 open 撮合所有 pending。返回当日成交记录。 */
     public List<Fill> settleAtOpen(Map<String, BigDecimal> openByCode) {
         List<Fill> fills = new ArrayList<>();
@@ -78,18 +118,20 @@ public class BacktestSandbox {
             }
             if ("BUY".equals(p.side)) {
                 BigDecimal frozen = p.limitPrice.multiply(BigDecimal.valueOf(p.amount));
+                // 限价单语义：open > limitPrice 不成交，撤单返还冻结。
+                // 之前会强行按 open 成交（甚至从 balance 里"补差"），违背 A 股限价规则、
+                // 在跳空高开时会让回测结果系统性偏乐观。
+                if (open.compareTo(p.limitPrice) > 0) {
+                    frozenBalance = frozenBalance.subtract(frozen);
+                    balance = balance.add(frozen);
+                    continue;
+                }
                 frozenBalance = frozenBalance.subtract(frozen);
                 BigDecimal actualCost = open.multiply(BigDecimal.valueOf(p.amount));
                 BigDecimal diff = frozen.subtract(actualCost);
                 if (diff.signum() > 0) {
+                    // 跳空低开（open < limit），按 open 成交并把多冻结的部分退回 balance
                     balance = balance.add(diff);
-                } else if (diff.signum() < 0) {
-                    BigDecimal extra = diff.negate();
-                    if (balance.compareTo(extra) < 0) {
-                        balance = balance.add(frozen);
-                        continue;
-                    }
-                    balance = balance.subtract(extra);
                 }
                 Pos pos = positions.get(p.code);
                 if (pos == null) {
@@ -102,15 +144,16 @@ public class BacktestSandbox {
                     pos.amount = newAmt;
                 }
                 todayBuys.add(p.code);
-                fills.add(new Fill(p.code, "BUY", p.amount, open, balance));
+                fills.add(new Fill(p.code, "BUY", p.amount, open, balance, null));
             } else {
                 Pos pos = positions.get(p.code);
                 if (pos == null || pos.amount < p.amount) continue;
+                BigDecimal costPriceAtSell = pos.costPrice;
                 pos.amount -= p.amount;
                 if (pos.amount == 0) positions.remove(p.code);
                 BigDecimal income = open.multiply(BigDecimal.valueOf(p.amount));
                 balance = balance.add(income);
-                fills.add(new Fill(p.code, "SELL", p.amount, open, balance));
+                fills.add(new Fill(p.code, "SELL", p.amount, open, balance, costPriceAtSell));
             }
         }
         pendings = new ArrayList<>();
@@ -142,5 +185,6 @@ public class BacktestSandbox {
 
     private record Pending(String code, String side, int amount, BigDecimal limitPrice) {}
 
-    public record Fill(String code, String side, int amount, BigDecimal price, BigDecimal balanceAfter) {}
+    public record Fill(String code, String side, int amount, BigDecimal price, BigDecimal balanceAfter,
+                       BigDecimal costPriceAtSell) {}
 }
