@@ -9,6 +9,8 @@ import com.aitrade.trade.dto.CreateTraderReq;
 import com.aitrade.trade.dto.PositionVO;
 import com.aitrade.trade.dto.TraderVO;
 import com.aitrade.trade.dto.UpdateTraderReq;
+import com.aitrade.trade.strategy.indicator.IndicatorStrategyExecutor;
+import com.aitrade.trade.strategy.script.ScriptEngineFactory;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -28,11 +30,12 @@ import java.util.Set;
 public class TraderService {
 
     public static final BigDecimal DEFAULT_INITIAL_BALANCE = new BigDecimal("1000000");
-    public static final Set<String> STRATEGY_TYPES = Set.of("MANUAL", "MA", "LLM");
+    public static final Set<String> STRATEGY_TYPES = Set.of("MANUAL", "MA", "LLM", "INDICATOR", "SCRIPT");
 
     private final AiTraderMapper aiTraderMapper;
     private final PositionMapper positionMapper;
     private final com.aitrade.mapper.TradeOrderMapper tradeOrderMapper;
+    private final ScriptEngineFactory scriptEngineFactory;
 
     public AiTrader createDefault(Long userId) {
         AiTrader t = new AiTrader();
@@ -77,6 +80,17 @@ public class TraderService {
             t.setLlmModel(blankToNull(req.getLlmModel()));
             t.setLlmPrompt(blankToNull(req.getLlmPrompt()));
         }
+        if ("INDICATOR".equals(type)) {
+            String cfg = blankToNull(req.getIndicatorConfigJson());
+            validateIndicatorConfig(cfg);
+            t.setIndicatorConfigJson(cfg);
+        }
+        if ("SCRIPT".equals(type)) {
+            String code = blankToNull(req.getScriptCode());
+            validateScriptCode(code);
+            t.setScriptCode(code);
+        }
+        t.setPoolName(normalizePoolName(req.getPoolName()));
         LocalDateTime now = LocalDateTime.now();
         t.setCreatedAt(now);
         t.setUpdatedAt(now);
@@ -100,6 +114,27 @@ public class TraderService {
         // 仅当传非空字符串才更新 key；null 或空串表示保留旧值
         if (req.getLlmApiKey() != null && !req.getLlmApiKey().isEmpty()) {
             t.setLlmApiKey(req.getLlmApiKey());
+        }
+        if (req.getIndicatorConfigJson() != null) {
+            String cfg = blankToNull(req.getIndicatorConfigJson());
+            if (cfg != null) validateIndicatorConfig(cfg);
+            t.setIndicatorConfigJson(cfg);
+        }
+        if (req.getScriptCode() != null) {
+            String code = blankToNull(req.getScriptCode());
+            if (code != null) validateScriptCode(code);
+            t.setScriptCode(code);
+        }
+        if ("INDICATOR".equals(t.getStrategyType())) {
+            validateIndicatorConfig(t.getIndicatorConfigJson());
+        }
+        if ("SCRIPT".equals(t.getStrategyType())) {
+            validateScriptCode(t.getScriptCode());
+        }
+
+        // poolName：null 不动；空串清空（回到默认 watchlist）；非空字符串归一化
+        if (req.getPoolName() != null) {
+            t.setPoolName(normalizePoolName(req.getPoolName()));
         }
 
         // 修改初始资产：必须清仓且无 PENDING 单，否则破坏资金守恒
@@ -208,6 +243,10 @@ public class TraderService {
         vo.setLlmModel(t.getLlmModel());
         vo.setLlmPrompt(t.getLlmPrompt());
         vo.setLlmApiKeySet(t.getLlmApiKey() != null && !t.getLlmApiKey().isEmpty());
+        vo.setIndicatorConfigJson(t.getIndicatorConfigJson());
+        vo.setScriptCode(t.getScriptCode());
+        vo.setPoolName(t.getPoolName());
+        vo.setTemplateId(t.getTemplateId());
         return vo;
     }
 
@@ -263,16 +302,75 @@ public class TraderService {
         if (maShort >= maLong) throw ApiException.badRequest("ma_short 必须小于 ma_long");
     }
 
+    private void validateIndicatorConfig(String json) {
+        if (json == null || json.isBlank()) {
+            throw ApiException.badRequest("INDICATOR 策略需要填写指标配置");
+        }
+        try {
+            IndicatorStrategyExecutor.parseAndValidate(json);
+        } catch (IllegalArgumentException e) {
+            throw ApiException.badRequest(e.getMessage());
+        }
+    }
+
+    /** 校验脚本能编译，且暴露了 decide 函数。运行期超时由 ScriptEngineFactory 兜底，这里只验语法。 */
+    private void validateScriptCode(String code) {
+        if (code == null || code.isBlank()) {
+            throw ApiException.badRequest("SCRIPT 策略需要填写脚本源码");
+        }
+        if (!code.contains("decide")) {
+            throw ApiException.badRequest("脚本必须定义 function decide()");
+        }
+        try {
+            scriptEngineFactory.compile(code);
+        } catch (Exception e) {
+            throw ApiException.badRequest("脚本编译失败：" + e.getMessage());
+        }
+    }
+
     private static String blankToNull(String s) { return s == null || s.isBlank() ? null : s.trim(); }
     private static BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
     private static Integer nzi(Integer v) { return v == null ? 0 : v; }
 
-    /** 用于策略调度循环：返回所有 enabled=1, deleted=0, strategy_type IN (MA, LLM) 的 trader。 */
+    /** poolName 归一化：null/空串 → null；其它做合法性校验（与 gateway pool_registry 一致的 slug 规则）。 */
+    private static String normalizePoolName(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) return null;
+        String lower = trimmed.toLowerCase();
+        if (!lower.matches("^[a-z0-9][a-z0-9_-]{0,31}$")) {
+            throw ApiException.badRequest("poolName 必须是 1-32 位小写字母/数字/下划线/横线，首位字母数字");
+        }
+        return lower;
+    }
+
+    /** 用于策略调度循环：返回所有 enabled=1, deleted=0, strategy_type IN (MA, LLM, INDICATOR, SCRIPT) 的 trader。 */
     public List<AiTrader> listForStrategy() {
         return aiTraderMapper.selectList(new QueryWrapper<AiTrader>()
                 .eq("enabled", 1)
                 .eq("deleted", 0)
-                .in("strategy_type", "MA", "LLM"));
+                .in("strategy_type", "MA", "LLM", "INDICATOR", "SCRIPT"));
+    }
+
+    /** dashboard 用：返回当前用户所有 LLM trader（含 disabled，但排除软删）。 */
+    public List<AiTrader> listMyLlmTraders(Long userId) {
+        return aiTraderMapper.selectList(new QueryWrapper<AiTrader>()
+                .eq("user_id", userId)
+                .eq("strategy_type", "LLM")
+                .eq("deleted", 0)
+                .orderByAsc("id"));
+    }
+
+    /** 清空全部 LLM 活动用：返回当前用户的所有 LLM trader id。 */
+    public List<Long> listMyLlmTraderIds(Long userId) {
+        List<AiTrader> traders = aiTraderMapper.selectList(new QueryWrapper<AiTrader>()
+                .eq("user_id", userId)
+                .eq("strategy_type", "LLM")
+                .eq("deleted", 0)
+                .select("id"));
+        List<Long> ids = new ArrayList<>(traders.size());
+        for (AiTrader t : traders) ids.add(t.getId());
+        return ids;
     }
 
     /** 用于排行榜：返回所有 deleted=0 的 trader。 */

@@ -37,6 +37,10 @@ public class SchemaMigrator {
         required.put("llm_model", "VARCHAR(64)");
         required.put("llm_prompt", "TEXT");
         required.put("initial_balance", "DECIMAL(18,2) DEFAULT 1000000");
+        required.put("template_id", "INTEGER");
+        required.put("indicator_config_json", "TEXT");
+        required.put("script_code", "TEXT");
+        required.put("pool_name", "VARCHAR(32)");
 
         Set<String> existing = new HashSet<>();
         List<Map<String, Object>> rows = jdbc.queryForList("PRAGMA table_info(ai_trader)");
@@ -72,6 +76,223 @@ public class SchemaMigrator {
             jdbc.execute("CREATE INDEX IF NOT EXISTS idx_trader_profit ON ai_trader(total_profit DESC)");
         } catch (Exception e) {
             log.warn("[schema-migrator] idx_trader_profit: {}", e.getMessage());
+        }
+
+        try {
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_llm_act_user ON llm_activity(user_id, id DESC)");
+        } catch (Exception e) {
+            log.warn("[schema-migrator] idx_llm_act_user: {}", e.getMessage());
+        }
+
+        try {
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_trader_template ON ai_trader(template_id)");
+        } catch (Exception e) {
+            log.warn("[schema-migrator] idx_trader_template: {}", e.getMessage());
+        }
+
+        migrateLlmActivity();
+        ensureDecisionMemoryTable();
+        ensureStrategyTemplateTable();
+        seedStrategyTemplates();
+        migrateBacktestTask();
+        migrateBacktestTrade();
+    }
+
+    /** 任务3 阶段二：backtest_task 加专业指标列（Sharpe/Sortino/Calmar/年化/胜率/盈亏比 + 基准 + 月度收益）。 */
+    private void migrateBacktestTask() {
+        Map<String, String> required = new LinkedHashMap<>();
+        required.put("sharpe_ratio", "DECIMAL(10,4)");
+        required.put("sortino_ratio", "DECIMAL(10,4)");
+        required.put("calmar_ratio", "DECIMAL(10,4)");
+        required.put("annual_return_pct", "DECIMAL(10,4)");
+        required.put("win_rate_pct", "DECIMAL(10,4)");
+        required.put("profit_loss_ratio", "DECIMAL(10,4)");
+        required.put("benchmark_curve_json", "TEXT");
+        required.put("monthly_returns_json", "TEXT");
+
+        Set<String> existing = new HashSet<>();
+        List<Map<String, Object>> rows;
+        try {
+            rows = jdbc.queryForList("PRAGMA table_info(backtest_task)");
+        } catch (Exception e) {
+            log.warn("[schema-migrator] PRAGMA backtest_task failed: {}", e.getMessage());
+            return;
+        }
+        for (Map<String, Object> row : rows) {
+            Object name = row.get("name");
+            if (name != null) existing.add(String.valueOf(name).toLowerCase());
+        }
+        if (existing.isEmpty()) {
+            log.warn("[schema-migrator] backtest_task not found, skip (schema.sql will create)");
+            return;
+        }
+
+        for (Map.Entry<String, String> col : required.entrySet()) {
+            if (existing.contains(col.getKey().toLowerCase())) continue;
+            String sql = "ALTER TABLE backtest_task ADD COLUMN " + col.getKey() + " " + col.getValue();
+            try {
+                jdbc.execute(sql);
+                log.info("[schema-migrator] added column backtest_task.{}", col.getKey());
+            } catch (Exception e) {
+                log.error("[schema-migrator] failed to add column backtest_task.{}: {}", col.getKey(), e.getMessage());
+            }
+        }
+    }
+
+    /** backtest_trade 加 cost_price 列：用于展示卖出时的成本价、前端算每笔盈亏。 */
+    private void migrateBacktestTrade() {
+        Map<String, String> required = new LinkedHashMap<>();
+        required.put("cost_price", "DECIMAL(10,3)");
+        required.put("stock_name", "VARCHAR(64)");
+
+        Set<String> existing = new HashSet<>();
+        List<Map<String, Object>> rows;
+        try {
+            rows = jdbc.queryForList("PRAGMA table_info(backtest_trade)");
+        } catch (Exception e) {
+            log.warn("[schema-migrator] PRAGMA backtest_trade failed: {}", e.getMessage());
+            return;
+        }
+        for (Map<String, Object> row : rows) {
+            Object name = row.get("name");
+            if (name != null) existing.add(String.valueOf(name).toLowerCase());
+        }
+        if (existing.isEmpty()) {
+            log.warn("[schema-migrator] backtest_trade not found, skip (schema.sql will create)");
+            return;
+        }
+        for (Map.Entry<String, String> col : required.entrySet()) {
+            if (existing.contains(col.getKey().toLowerCase())) continue;
+            String sql = "ALTER TABLE backtest_trade ADD COLUMN " + col.getKey() + " " + col.getValue();
+            try {
+                jdbc.execute(sql);
+                log.info("[schema-migrator] added column backtest_trade.{}", col.getKey());
+            } catch (Exception e) {
+                log.error("[schema-migrator] failed to add column backtest_trade.{}: {}", col.getKey(), e.getMessage());
+            }
+        }
+    }
+
+    private void ensureStrategyTemplateTable() {
+        try {
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS strategy_template (
+                        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                        code                VARCHAR(64) NOT NULL UNIQUE,
+                        name                VARCHAR(64) NOT NULL,
+                        description         TEXT,
+                        strategy_type       VARCHAR(16) NOT NULL,
+                        default_params_json TEXT NOT NULL,
+                        tags                VARCHAR(128),
+                        is_official         INTEGER DEFAULT 1,
+                        sort_order          INTEGER DEFAULT 0,
+                        created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """);
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_tpl_official ON strategy_template(is_official, sort_order)");
+        } catch (Exception e) {
+            log.error("[schema-migrator] ensure strategy_template failed: {}", e.getMessage());
+        }
+    }
+
+    /** 首次启动表为空时插入官方种子模板。按 code UNIQUE 兜底，重复运行无副作用。 */
+    private void seedStrategyTemplates() {
+        try {
+            Integer cnt = jdbc.queryForObject("SELECT COUNT(*) FROM strategy_template", Integer.class);
+            if (cnt != null && cnt > 0) return;
+
+            String maClassic = "{\"maShort\":5,\"maLong\":20}";
+            String maMid = "{\"maShort\":10,\"maLong\":60}";
+            String llmValue = "{\"llmBaseUrl\":\"https://api.deepseek.com\",\"llmModel\":\"deepseek-chat\","
+                    + "\"llmPrompt\":\"你是一名稳健的价值投资型 A 股交易员。偏好低估值、稳定现金流的蓝筹股，回避高波动小盘股。"
+                    + "持仓集中度上限 5 只；单只浮亏 8% 触发止损；连续上涨 20% 后逐步减仓。盘整期允许空仓观察。\"}";
+            String llmTrend = "{\"llmBaseUrl\":\"https://api.deepseek.com\",\"llmModel\":\"deepseek-chat\","
+                    + "\"llmPrompt\":\"你是一名趋势跟随型 A 股交易员。仅在突破 20 日均线且成交量放大时买入；"
+                    + "跌破 10 日均线立即清仓。允许追高但拒绝抄底。盘整期保持轻仓。一次最多持有 3 只票。\"}";
+
+            jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "ma-classic-5-20", "MA 经典金叉",
+                    "5 日 / 20 日双均线金叉买入、死叉卖出。新手最易理解的趋势策略，适合在震荡偏多市场使用。",
+                    "MA", maClassic, "趋势,短线", 10);
+            jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "ma-midterm-10-60", "MA 中线持有",
+                    "10 日 / 60 日双均线策略，过滤短期噪音，捕捉中期趋势。换手率更低，更适合中线持仓。",
+                    "MA", maMid, "趋势,中线", 20);
+            jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "llm-value-investor", "LLM 价值投资型",
+                    "由 LLM 扮演价值投资者，偏好低估值蓝筹，单只止损 8%。使用前需自备 OpenAI 兼容 API Key。",
+                    "LLM", llmValue, "LLM,价值", 30);
+            jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "llm-trend-follower", "LLM 趋势跟随型",
+                    "由 LLM 扮演趋势跟随者，仅在突破时买入，跌破短均线即清仓。使用前需自备 OpenAI 兼容 API Key。",
+                    "LLM", llmTrend, "LLM,趋势", 40);
+            log.info("[schema-migrator] seeded 4 official strategy templates");
+        } catch (Exception e) {
+            log.warn("[schema-migrator] seed strategy_template failed: {}", e.getMessage());
+        }
+    }
+
+    private void ensureDecisionMemoryTable() {
+        try {
+            jdbc.execute("""
+                    CREATE TABLE IF NOT EXISTS llm_decision_memory (
+                        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                        trader_id           INTEGER NOT NULL,
+                        user_id             INTEGER,
+                        decision_id         INTEGER NOT NULL,
+                        order_id            INTEGER,
+                        stock_code          VARCHAR(16) NOT NULL,
+                        side                VARCHAR(8) NOT NULL,
+                        amount              INTEGER NOT NULL,
+                        price_at_decision   DECIMAL(18,4) NOT NULL,
+                        indicators_snapshot TEXT,
+                        reason              TEXT,
+                        created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        verified_at         TIMESTAMP,
+                        verify_horizon_days INTEGER,
+                        price_after_horizon DECIMAL(18,4),
+                        actual_return_pct   DECIMAL(10,4),
+                        was_correct         INTEGER
+                    )
+                    """);
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_dec_mem_trader_time ON llm_decision_memory(trader_id, created_at DESC)");
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_dec_mem_pending ON llm_decision_memory(verified_at) WHERE verified_at IS NULL");
+            jdbc.execute("CREATE INDEX IF NOT EXISTS idx_dec_mem_user ON llm_decision_memory(user_id, created_at DESC)");
+        } catch (Exception e) {
+            log.error("[schema-migrator] ensure llm_decision_memory failed: {}", e.getMessage());
+        }
+    }
+
+    private void migrateLlmActivity() {
+        Map<String, String> required = new LinkedHashMap<>();
+        required.put("prompt_json", "TEXT");
+
+        Set<String> existing = new HashSet<>();
+        List<Map<String, Object>> rows;
+        try {
+            rows = jdbc.queryForList("PRAGMA table_info(llm_activity)");
+        } catch (Exception e) {
+            log.warn("[schema-migrator] PRAGMA llm_activity failed: {}", e.getMessage());
+            return;
+        }
+        for (Map<String, Object> row : rows) {
+            Object name = row.get("name");
+            if (name != null) existing.add(String.valueOf(name).toLowerCase());
+        }
+        if (existing.isEmpty()) {
+            log.warn("[schema-migrator] llm_activity table not found, skip (schema.sql will create)");
+            return;
+        }
+
+        for (Map.Entry<String, String> col : required.entrySet()) {
+            if (existing.contains(col.getKey().toLowerCase())) continue;
+            String sql = "ALTER TABLE llm_activity ADD COLUMN " + col.getKey() + " " + col.getValue();
+            try {
+                jdbc.execute(sql);
+                log.info("[schema-migrator] added column llm_activity.{}", col.getKey());
+            } catch (Exception e) {
+                log.error("[schema-migrator] failed to add column llm_activity.{}: {}", col.getKey(), e.getMessage());
+            }
         }
     }
 }

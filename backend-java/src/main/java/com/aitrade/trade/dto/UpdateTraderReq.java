@@ -35,4 +35,14 @@ public class UpdateTraderReq {
     private String llmModel;
     @Size(max = 8000, message = "投资策略 prompt 不能超过 8000 字")
     private String llmPrompt;
+
+    @Size(max = 16000, message = "指标策略配置不能超过 16000 字")
+    private String indicatorConfigJson;
+
+    @Size(max = 32000, message = "脚本源码不能超过 32000 字")
+    private String scriptCode;
+
+    /** 选股池名；显式传空字符串视为清空回到默认 watchlist。 */
+    @Size(max = 32, message = "poolName 长度不能超过 32")
+    private String poolName;
 }

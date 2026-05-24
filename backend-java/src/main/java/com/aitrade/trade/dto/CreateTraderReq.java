@@ -35,4 +35,16 @@ public class CreateTraderReq {
     private String llmModel;
     @Size(max = 8000, message = "投资策略 prompt 不能超过 8000 字")
     private String llmPrompt;
+
+    /** INDICATOR 策略的 JSON 配置。前端组件序列化后透传，后端做语法+白名单校验。 */
+    @Size(max = 16000, message = "指标策略配置不能超过 16000 字")
+    private String indicatorConfigJson;
+
+    /** SCRIPT 策略的 JavaScript 源码。 */
+    @Size(max = 32000, message = "脚本源码不能超过 32000 字")
+    private String scriptCode;
+
+    /** 选股池名，对应 gateway pool_registry 里的 slug；null 表示沿用默认 watchlist。 */
+    @Size(max = 32, message = "poolName 长度不能超过 32")
+    private String poolName;
 }

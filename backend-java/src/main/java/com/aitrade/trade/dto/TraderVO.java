@@ -26,4 +26,12 @@ public class TraderVO {
     private String llmModel;
     private String llmPrompt;
     private Boolean llmApiKeySet;
+
+    private String indicatorConfigJson;
+    private String scriptCode;
+
+    /** 选股池名；null 表示走默认 watchlist。 */
+    private String poolName;
+
+    private Long templateId;
 }
