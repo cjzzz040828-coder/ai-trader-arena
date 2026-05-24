@@ -6,7 +6,6 @@ import { useTradeStore } from '@/stores/trade'
 import OrderBook from '@/components/OrderBook.vue'
 import KLineChart from '@/components/KLineChart.vue'
 import MinuteChart from '@/components/MinuteChart.vue'
-import LlmActivityPanel from '@/components/LlmActivityPanel.vue'
 
 defineOptions({ name: 'Dashboard' })
 
@@ -16,7 +15,6 @@ const tradeStore = useTradeStore()
 const dashboardTraderId = ref<number | null>(null)
 const dashboardTrader = computed(() =>
   tradeStore.traders.find(t => t.id === dashboardTraderId.value) || null)
-const showLlmOnDashboard = computed(() => dashboardTrader.value?.strategyType === 'LLM')
 
 // ---------- 下单状态 ----------
 const orderPrice = ref<number>(0)
@@ -56,6 +54,9 @@ function positionName(code: string): string {
 const FALLBACK_WATCHLIST = ['000001', '600519', '000333', '600036', '300750']
 
 const watchlist = ref<WatchlistItem[]>([])
+const watchlistGroups = ref<Record<string, string[]>>({})
+const selectedGroup = ref<string>('ALL')  // 'ALL' 或 group name
+const groupTabs = computed(() => ['ALL', ...Object.keys(watchlistGroups.value)])
 const snapshots = ref<SnapshotItem[]>([])
 const selectedCode = ref('')
 const health = ref<any>(null)
@@ -87,9 +88,14 @@ const tradesForSelected = computed<TradeMarker[]>(() =>
 
 // 应用过滤（不含排序），queryCodes 基于这个，避免排序时反复触发 refresh
 const filteredWatchlist = computed(() => {
+  let list = watchlist.value
+  if (selectedGroup.value !== 'ALL') {
+    const groupCodes = new Set(watchlistGroups.value[selectedGroup.value] || [])
+    list = list.filter(w => groupCodes.has(w.code))
+  }
   const q = stockFilter.value.trim()
-  if (!q) return watchlist.value
-  return watchlist.value.filter(w => w.code.includes(q) || w.name.includes(q))
+  if (!q) return list
+  return list.filter(w => w.code.includes(q) || w.name.includes(q))
 })
 
 // 展示用（含排序）。排序依赖 snapshots 中的实时价 / 涨幅
@@ -144,8 +150,8 @@ const visiblePositions = computed(() => {
 })
 
 function profitColor(pct: number | null | undefined): string {
-  if (pct == null || pct === 0) return '#666'
-  return pct > 0 ? '#ef4444' : '#10b981'
+  if (pct == null || pct === 0) return 'var(--brand-neutral)'
+  return pct > 0 ? 'var(--brand-up)' : 'var(--brand-down)'
 }
 
 const QUOTE_BATCH = 80  // mootdx/TDX 单次 quotes 上限
@@ -154,6 +160,7 @@ async function loadWatchlist(force = false) {
   try {
     const resp = force ? await api.watchlistReload() : await api.watchlist()
     watchlist.value = resp.data || []
+    watchlistGroups.value = resp.groups || {}
     if (!selectedCode.value && watchlist.value.length) {
       selectedCode.value = watchlist.value[0].code
     }
@@ -163,6 +170,7 @@ async function loadWatchlist(force = false) {
     watchlist.value = FALLBACK_WATCHLIST.map(c => ({
       code: c, name: c, market: 'SH' as const, added_price: 0, added_date: ''
     }))
+    watchlistGroups.value = {}
     if (!selectedCode.value) selectedCode.value = FALLBACK_WATCHLIST[0]
   }
 }
@@ -184,6 +192,7 @@ async function refreshAll() {
     ])
     health.value = h
     if (wl?.data?.length) watchlist.value = wl.data
+    if (wl?.groups) watchlistGroups.value = wl.groups
     snapshots.value = snapResults.flatMap(s => s.data || [])
     lastRefreshAt.value = new Date().toLocaleTimeString()
   } catch (e: any) {
@@ -206,10 +215,10 @@ watch(effectiveInterval, () => setupTimer())
 watch(stockFilter, () => refreshAll())  // 过滤变了立即拉新代码的行情
 
 function priceColor(item: SnapshotItem) {
-  if (!item) return '#666'
-  if (item.change > 0) return '#ef4444'
-  if (item.change < 0) return '#10b981'
-  return '#666'
+  if (!item) return 'var(--brand-neutral)'
+  if (item.change > 0) return 'var(--brand-up)'
+  if (item.change < 0) return 'var(--brand-down)'
+  return 'var(--brand-neutral)'
 }
 
 function selectStock(code: string) {
@@ -314,7 +323,7 @@ onBeforeUnmount(() => {
     <!-- 顶部状态条 -->
     <div class="topbar">
       <div class="status-item">
-        <span class="dot" :style="{ background: isOpen ? '#10b981' : '#9ca3af' }"></span>
+        <span class="dot" :style="{ background: isOpen ? 'var(--brand-down)' : 'var(--brand-neutral)' }"></span>
         <span>市场：<b>{{ health?.market_status || '--' }}</b></span>
       </div>
       <div class="status-item">服务器：{{ (health?.server_time || '--').replace('T', ' ') }}</div>
@@ -339,7 +348,7 @@ onBeforeUnmount(() => {
         <span v-if="!isOpen" class="hint">（收盘自动降频 30s）</span>
       </div>
 
-      <button class="refresh-btn" @click="refreshAll">手动刷新</button>
+      <el-button type="primary" size="small" @click="refreshAll">手动刷新</el-button>
 
       <div v-if="errMsg" class="error">{{ errMsg }}</div>
     </div>
@@ -361,6 +370,16 @@ onBeforeUnmount(() => {
           <button v-if="leftTab === 'watchlist'" class="sync-btn" @click="syncFromTHS" title="从同花顺重新同步">↻</button>
         </div>
         <div class="filter-bar">
+          <div v-if="leftTab === 'watchlist' && groupTabs.length > 1" class="group-chips">
+            <button
+              v-for="g in groupTabs"
+              :key="g"
+              :class="{ chip: true, active: selectedGroup === g }"
+              @click="selectedGroup = g"
+            >
+              {{ g === 'ALL' ? `全部 ${watchlist.length}` : `${g} ${watchlistGroups[g]?.length || 0}` }}
+            </button>
+          </div>
           <input v-model="stockFilter" placeholder="代码/名称过滤" />
           <select v-model="sortBy" title="排序">
             <option value="default">默认</option>
@@ -439,8 +458,8 @@ onBeforeUnmount(() => {
               {{ selectedSnap?.price?.toFixed(2) || '--' }}
             </span>
             <span class="big-change" :style="{ color: selectedSnap ? priceColor(selectedSnap) : '#000' }">
-              {{ selectedSnap?.change >= 0 ? '+' : '' }}{{ selectedSnap?.change }}
-              ({{ selectedSnap?.change_pct >= 0 ? '+' : '' }}{{ selectedSnap?.change_pct }}%)
+              {{ (selectedSnap?.change ?? 0) >= 0 ? '+' : '' }}{{ selectedSnap?.change }}
+              ({{ (selectedSnap?.change_pct ?? 0) >= 0 ? '+' : '' }}{{ selectedSnap?.change_pct }}%)
             </span>
           </div>
           <div class="freq-tabs">
@@ -472,31 +491,31 @@ onBeforeUnmount(() => {
         <div class="kpi-grid" v-if="selectedSnap">
           <div><label>今开</label><b>{{ selectedSnap.open?.toFixed(2) }}</b></div>
           <div><label>昨收</label><b>{{ selectedSnap.last_close?.toFixed(2) }}</b></div>
-          <div><label>最高</label><b style="color:#ef4444">{{ selectedSnap.high?.toFixed(2) }}</b></div>
-          <div><label>最低</label><b style="color:#10b981">{{ selectedSnap.low?.toFixed(2) }}</b></div>
+          <div><label>最高</label><b style="color:#f87171">{{ selectedSnap.high?.toFixed(2) }}</b></div>
+          <div><label>最低</label><b style="color:#34d399">{{ selectedSnap.low?.toFixed(2) }}</b></div>
           <div><label>成交量(手)</label><b>{{ selectedSnap.vol?.toLocaleString() }}</b></div>
           <div><label>成交额(亿)</label><b>{{ (selectedSnap.amount / 1e8).toFixed(2) }}</b></div>
-          <div><label>外盘</label><b style="color:#ef4444">{{ selectedSnap.b_vol?.toLocaleString() }}</b></div>
-          <div><label>内盘</label><b style="color:#10b981">{{ selectedSnap.s_vol?.toLocaleString() }}</b></div>
+          <div><label>外盘</label><b style="color:#f87171">{{ selectedSnap.b_vol?.toLocaleString() }}</b></div>
+          <div><label>内盘</label><b style="color:#34d399">{{ selectedSnap.s_vol?.toLocaleString() }}</b></div>
         </div>
       </div>
 
       <!-- 右：五档盘口 + 下单 -->
       <div class="col right">
-        <div class="col-title">五档盘口</div>
-        <OrderBook :snap="selectedSnap" />
+        <div class="ob-wrap">
+          <OrderBook :snap="selectedSnap" :code="selectedCode" />
+        </div>
 
-        <div class="order-panel">
-          <div class="col-title" style="margin-top: 16px;">
+        <el-card class="order-card" shadow="never" :body-style="{ padding: '12px 14px' }">
+          <div class="col-title order-title">
             下单
-            <span v-if="dashboardTrader" style="font-weight: 400; font-size: 12px; color: #6b7280;">
+            <span v-if="dashboardTrader" class="order-trader-tag">
               → {{ dashboardTrader.name }}
             </span>
           </div>
           <div class="form-row">
             <label>股票</label>
-            <input type="text" :value="selectedCode || '请先在左侧选一只'" readonly
-                   style="background:#f9fafb; color:#6b7280;" />
+            <input type="text" :value="selectedCode || '请先在左侧选一只'" readonly class="input-readonly" />
           </div>
           <div class="form-row">
             <label>价格</label>
@@ -508,19 +527,15 @@ onBeforeUnmount(() => {
             <input type="number" v-model.number="orderAmount" step="100" min="100" placeholder="100" />
           </div>
           <div class="btn-row">
-            <button class="btn buy" :disabled="!canSubmit || submitting"
-                    @click="submitOrder('BUY')">买入</button>
-            <button class="btn sell" :disabled="!canSubmit || submitting"
-                    @click="submitOrder('SELL')">卖出</button>
+            <el-button class="btn-buy" size="large" :disabled="!canSubmit" :loading="submitting"
+                       @click="submitOrder('BUY')">买入</el-button>
+            <el-button class="btn-sell" size="large" :disabled="!canSubmit" :loading="submitting"
+                       @click="submitOrder('SELL')">卖出</el-button>
           </div>
-          <div v-if="!dashboardTraderId" style="color:#ef4444;font-size:12px;margin-top:8px;text-align:center;">
+          <div v-if="!dashboardTraderId" class="warn-tip">
             请先在顶部选择一个 trader
           </div>
-        </div>
-
-        <div v-if="showLlmOnDashboard && dashboardTraderId" class="dash-llm-section">
-          <LlmActivityPanel :trader-id="dashboardTraderId" />
-        </div>
+        </el-card>
       </div>
     </div>
   </div>
@@ -531,23 +546,18 @@ onBeforeUnmount(() => {
 .topbar {
   display: flex; align-items: center; gap: 20px;
   padding: 10px 16px;
-  background: #fafafa;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--brand-bg-soft);
+  border-bottom: 1px solid var(--brand-border);
   font-size: 13px;
 }
-.status-item { display: flex; align-items: center; gap: 6px; }
+.status-item { display: flex; align-items: center; gap: 6px; color: var(--brand-text-regular); }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .spacer { flex: 1; }
 .refresh-ctl select {
-  padding: 3px 8px; border: 1px solid #e5e7eb; border-radius: 4px; cursor: pointer;
+  padding: 3px 8px; border: 1px solid var(--brand-border); border-radius: 4px; cursor: pointer;
 }
-.refresh-ctl .hint { color: #9ca3af; font-size: 12px; margin-left: 4px; }
-.refresh-btn {
-  padding: 4px 12px; background: #3b82f6; color: #fff;
-  border: none; border-radius: 4px; cursor: pointer; font-size: 13px;
-}
-.refresh-btn:hover { background: #2563eb; }
-.error { color: #ef4444; }
+.refresh-ctl .hint { color: var(--brand-text-placeholder); font-size: 12px; margin-left: 4px; }
+.error { color: var(--brand-up); }
 
 .layout {
   flex: 1;
@@ -555,77 +565,106 @@ onBeforeUnmount(() => {
   grid-template-columns: 220px 1fr 320px;
   gap: 8px;
   padding: 8px;
-  background: #f3f4f6;
+  background: var(--brand-bg);
   overflow: hidden;
 }
-.col { background: #fff; border-radius: 6px; overflow-y: auto; }
-.dash-llm-section {
-  margin-top: 12px;
-  height: 380px;
-  border-top: 1px solid #e5e7eb;
-  padding-top: 8px;
+.col { background: var(--brand-surface); border-radius: 6px; overflow-y: auto; }
+.col.right {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ob-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .col-title {
   padding: 10px 14px;
   font-weight: 600;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--brand-border);
   font-size: 14px;
   display: flex; align-items: center; justify-content: space-between;
+  color: var(--brand-text-primary);
 }
+.order-title {
+  padding: 6px 0 10px;
+  border-bottom: 1px solid var(--brand-border-light);
+  margin-bottom: 10px;
+}
+.order-trader-tag { font-weight: 400; font-size: 12px; color: var(--brand-text-secondary); }
+
 .left-tabs {
   display: flex; align-items: center;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--brand-border);
   padding: 0 6px;
 }
 .left-tabs .tab {
   flex: 1;
   padding: 10px 4px;
   background: transparent; border: none; cursor: pointer;
-  font-size: 13px; font-weight: 600; color: #6b7280;
+  font-size: 13px; font-weight: 600; color: var(--brand-text-secondary);
   border-bottom: 2px solid transparent;
 }
-.left-tabs .tab:hover { color: #3b82f6; }
-.left-tabs .tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
-.left-tabs .tab .cnt { font-weight: 400; font-size: 12px; color: #9ca3af; margin-left: 2px; }
-.left-tabs .tab.active .cnt { color: #60a5fa; }
+.left-tabs .tab:hover { color: var(--brand-primary); }
+.left-tabs .tab.active { color: var(--brand-primary); border-bottom-color: var(--brand-primary); }
+.left-tabs .tab .cnt { font-weight: 400; font-size: 12px; color: var(--brand-text-placeholder); margin-left: 2px; }
+.left-tabs .tab.active .cnt { color: var(--el-color-primary-light-3); }
 .left-tabs .tab-spacer { width: 6px; }
 .empty-tip {
   padding: 24px 14px;
-  color: #9ca3af;
+  color: var(--brand-text-placeholder);
   font-size: 12px;
   text-align: center;
 }
 .stock-item .line2 .frozen { color: #f59e0b; font-size: 11px; margin-left: 4px; }
 .sync-btn {
-  border: 1px solid #e5e7eb; background: #fff;
+  border: 1px solid var(--brand-border); background: var(--brand-surface);
   padding: 2px 8px; border-radius: 4px;
   cursor: pointer; font-size: 14px;
+  color: var(--brand-text-secondary);
 }
-.sync-btn:hover { background: #eff6ff; border-color: #3b82f6; color: #3b82f6; }
+.sync-btn:hover { background: var(--el-color-primary-light-9); border-color: var(--brand-primary); color: var(--brand-primary); }
 
 .filter-bar {
   padding: 6px 10px;
   display: flex; flex-direction: column; gap: 4px;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid var(--brand-border-light);
 }
 .filter-bar input {
   width: 100%; box-sizing: border-box; padding: 4px 8px;
-  border: 1px solid #e5e7eb; border-radius: 4px; font-size: 12px;
+  border: 1px solid var(--brand-border); border-radius: 4px; font-size: 12px;
 }
 .filter-bar select {
   width: 100%; box-sizing: border-box; padding: 4px 6px;
-  border: 1px solid #e5e7eb; border-radius: 4px; font-size: 12px;
-  cursor: pointer; background: #fff;
+  border: 1px solid var(--brand-border); border-radius: 4px; font-size: 12px;
+  cursor: pointer; background: var(--brand-surface);
+}
+.group-chips {
+  display: flex; gap: 4px; flex-wrap: wrap;
+}
+.group-chips .chip {
+  padding: 2px 8px; font-size: 11px;
+  border: 1px solid var(--brand-border); background: var(--brand-surface);
+  color: var(--brand-text-secondary);
+  border-radius: 10px; cursor: pointer;
+  line-height: 1.6;
+}
+.group-chips .chip:hover { border-color: var(--brand-primary); color: var(--brand-primary); }
+.group-chips .chip.active {
+  background: var(--brand-primary); border-color: var(--brand-primary);
+  color: #fff; font-weight: 600;
 }
 
-.stock-item .line2.muted { color: #9ca3af; font-size: 11px; }
+.stock-item .line2.muted { color: var(--brand-text-placeholder); font-size: 11px; }
 
-.stock-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #f3f4f6; }
-.stock-item:hover { background: #f9fafb; }
-.stock-item.active { background: #eff6ff; border-left: 3px solid #3b82f6; padding-left: 11px; }
+.stock-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--brand-border-light); }
+.stock-item:hover { background: var(--brand-bg-soft); }
+.stock-item.active { background: var(--el-color-primary-light-9); border-left: 3px solid var(--brand-primary); padding-left: 11px; }
 .stock-item .line1 { display: flex; justify-content: space-between; }
-.stock-item .name { font-weight: 600; }
-.stock-item .code { color: #9ca3af; font-size: 12px; }
+.stock-item .name { font-weight: 600; color: var(--brand-text-primary); }
+.stock-item .code { color: var(--brand-text-placeholder); font-size: 12px; }
 .stock-item .line2 { display: flex; justify-content: space-between; margin-top: 4px; }
 .stock-item .price { font-family: 'Consolas', monospace; font-weight: 600; }
 .stock-item .pct { font-size: 12px; }
@@ -633,42 +672,77 @@ onBeforeUnmount(() => {
 .center .header {
   padding: 12px 16px;
   display: flex; justify-content: space-between; align-items: center;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--brand-border);
 }
-.stock-name { font-size: 18px; font-weight: 700; margin-right: 8px; }
-.stock-code { color: #9ca3af; margin-right: 16px; }
+.stock-name { font-size: 18px; font-weight: 700; margin-right: 8px; color: var(--brand-text-primary); }
+.stock-code { color: var(--brand-text-placeholder); margin-right: 16px; }
 .big-price { font-size: 24px; font-weight: 700; font-family: 'Consolas', monospace; margin-right: 12px; }
 .big-change { font-size: 14px; font-family: 'Consolas', monospace; }
 .freq-tabs button {
-  border: 1px solid #e5e7eb; background: #fff;
+  border: 1px solid var(--brand-border); background: var(--brand-surface);
   padding: 4px 12px; margin-left: 4px; cursor: pointer;
-  border-radius: 4px; font-size: 12px;
+  border-radius: 4px; font-size: 12px; color: var(--brand-text-regular);
 }
-.freq-tabs button.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.freq-tabs button.active { background: var(--brand-primary); color: #fff; border-color: var(--brand-primary); }
 
 .kpi-grid {
   padding: 16px; display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 12px; font-size: 13px; border-top: 1px solid #e5e7eb;
+  gap: 12px; font-size: 13px; border-top: 1px solid var(--brand-border);
 }
 .kpi-grid > div { display: flex; flex-direction: column; gap: 4px; }
-.kpi-grid label { color: #9ca3af; font-size: 12px; }
-.kpi-grid b { font-family: 'Consolas', monospace; font-weight: 600; }
+.kpi-grid label { color: var(--brand-text-placeholder); font-size: 12px; }
+.kpi-grid b { font-family: 'Consolas', monospace; font-weight: 600; color: var(--brand-text-primary); }
 
-.order-panel { padding: 12px 14px; }
+.order-card {
+  margin-top: 10px;
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--brand-border);
+  flex: 0 0 auto;
+}
 .form-row { display: flex; align-items: center; margin-bottom: 8px; }
-.form-row label { width: 50px; color: #6b7280; font-size: 13px; }
+.form-row label { width: 50px; color: var(--brand-text-secondary); font-size: 13px; }
 .form-row input {
-  flex: 1; padding: 6px 10px; border: 1px solid #e5e7eb; border-radius: 4px;
+  flex: 1; padding: 6px 10px; border: 1px solid var(--brand-border); border-radius: 4px;
   font-family: 'Consolas', monospace;
 }
+.input-readonly { background: var(--brand-bg-soft); color: var(--brand-text-secondary); }
 .btn-row { display: flex; gap: 8px; margin-top: 12px; }
-.btn { flex: 1; padding: 10px 0; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; color: #fff; }
-.btn.buy { background: #ef4444; }
-.btn.sell { background: #10b981; }
-.btn:disabled { background: #d1d5db; cursor: not-allowed; }
+.btn-row .el-button { flex: 1; margin-left: 0; }
+.btn-row .el-button + .el-button { margin-left: 0; }
 .mini-btn {
   margin-left: 6px; padding: 3px 8px; font-size: 11px; cursor: pointer;
-  background: #fff; border: 1px solid #d1d5db; border-radius: 4px; color: #6b7280;
+  background: var(--brand-surface); border: 1px solid var(--brand-border); border-radius: 4px; color: var(--brand-text-secondary);
 }
-.mini-btn:hover { border-color: #3b82f6; color: #3b82f6; }
+.mini-btn:hover { border-color: var(--brand-primary); color: var(--brand-primary); }
+
+.warn-tip { color: var(--brand-up); font-size: 12px; margin-top: 8px; text-align: center; }
+
+/* A 股语义按钮：买红卖绿（暗色科技感版） */
+.btn-buy {
+  --el-button-bg-color: var(--brand-up);
+  --el-button-border-color: var(--brand-up);
+  --el-button-hover-bg-color: #fca5a5;
+  --el-button-hover-border-color: #fca5a5;
+  --el-button-text-color: #fff;
+  --el-button-active-bg-color: #ef4444;
+  --el-button-active-border-color: #ef4444;
+  --el-button-disabled-bg-color: rgba(248, 113, 113, 0.25);
+  --el-button-disabled-border-color: rgba(248, 113, 113, 0.30);
+  --el-button-disabled-text-color: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.25);
+}
+.btn-sell {
+  --el-button-bg-color: var(--brand-down);
+  --el-button-border-color: var(--brand-down);
+  --el-button-hover-bg-color: #6ee7b7;
+  --el-button-hover-border-color: #6ee7b7;
+  --el-button-text-color: #fff;
+  --el-button-active-bg-color: #10b981;
+  --el-button-active-border-color: #10b981;
+  --el-button-disabled-bg-color: rgba(52, 211, 153, 0.25);
+  --el-button-disabled-border-color: rgba(52, 211, 153, 0.30);
+  --el-button-disabled-text-color: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.25);
+}
 </style>

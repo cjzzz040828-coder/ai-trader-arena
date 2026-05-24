@@ -72,15 +72,26 @@ async function submit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f3f4f6;
+  background: var(--brand-bg);
+  position: relative;
+  overflow: hidden;
 }
 .card {
   width: 360px;
   padding: 32px;
-  background: #fff;
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  box-shadow: var(--brand-shadow-lg);
+  position: relative;
+  z-index: 1;
 }
-.card h2 { margin: 0 0 16px; text-align: center; color: #1f2937; }
+.card h2 {
+  margin: 0 0 16px;
+  text-align: center;
+  color: var(--brand-primary);
+  font-size: 22px;
+  letter-spacing: 2px;
+}
 .tabs { margin-bottom: 8px; }
 </style>

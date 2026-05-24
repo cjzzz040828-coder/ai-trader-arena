@@ -2,6 +2,8 @@
 import { onMounted, onBeforeUnmount, ref, watch, shallowRef } from 'vue'
 import * as echarts from 'echarts'
 import { api, type BarItem, type TradeMarker } from '@/api'
+import { readChartColors } from '@/composables/chartTheme'
+import { useTheme } from '@/composables/theme'
 
 const props = withDefaults(defineProps<{
   code: string
@@ -12,6 +14,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   intervalMs: 3000
 })
+const theme = useTheme()
 
 const chartEl = ref<HTMLDivElement | null>(null)
 const chart = shallowRef<echarts.ECharts | null>(null)
@@ -61,6 +64,7 @@ function normalizeFilledAt(s: string): string {
 /** 取出今天的成交点，按 HH:MM 落到 FULL_SLOTS 上 */
 function buildTradeMarks(trades: TradeMarker[], baseline: number, maxDev: number) {
   if (!trades.length) return []
+  const c = readChartColors()
   const todayPrefix = todayKey()
   const marks: any[] = []
   for (const t of trades) {
@@ -80,15 +84,15 @@ function buildTradeMarks(trades: TradeMarker[], baseline: number, maxDev: number
       symbolSize: [14, 16],
       symbolRotate: isBuy ? 0 : 180,
       itemStyle: {
-        color: isBuy ? '#ef4444' : '#10b981',
-        borderColor: '#fff',
+        color: isBuy ? c.up : c.down,
+        borderColor: c.surface,
         borderWidth: 1
       },
       label: {
         show: true,
         position: isBuy ? 'bottom' : 'top',
         formatter: isBuy ? 'B' : 'S',
-        color: isBuy ? '#ef4444' : '#10b981',
+        color: isBuy ? c.up : c.down,
         fontSize: 10,
         fontWeight: 700,
         distance: 3
@@ -156,23 +160,25 @@ function buildOption(bars: BarItem[], baseline: number, liveTickPrice?: number, 
   const yMax = baseline + maxDev * 1.05
 
   const tradeMarks = buildTradeMarks(trades, baseline, maxDev)
+  const c = readChartColors()
 
   return {
     animation: false,
-    backgroundColor: '#fff',
+    backgroundColor: 'transparent',
+    textStyle: { color: c.textRegular },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' },
-      backgroundColor: 'rgba(255,255,255,0.95)',
-      borderColor: '#e5e7eb',
-      textStyle: { color: '#111' },
+      axisPointer: { type: 'cross', lineStyle: { color: c.primary }, crossStyle: { color: c.primary } },
+      backgroundColor: c.tooltipBg,
+      borderColor: c.primary,
+      textStyle: { color: c.textRegular },
       formatter: (params: any) => {
         const arr = Array.isArray(params) ? params : [params]
         const mp = arr.find((p: any) => p.componentType === 'markPoint')
         if (mp && mp.data?._trade) {
           const tt = mp.data._trade as TradeMarker
           const isBuy = tt.side === 'BUY'
-          const color = isBuy ? '#ef4444' : '#10b981'
+          const color = isBuy ? c.up : c.down
           return `<b style="color:${color}">${isBuy ? '买入' : '卖出'}</b> ${tt.amount} 股<br/>价格 <b>${tt.price.toFixed(3)}</b><br/>时间 ${normalizeFilledAt(tt.filledAt)}`
         }
         const t = arr[0]?.name
@@ -181,7 +187,7 @@ function buildOption(bars: BarItem[], baseline: number, liveTickPrice?: number, 
         const vol = Array.isArray(v) ? v[1] : v
         if (p == null) return `${t}<br/>暂无数据`
         const pct = ((p - baseline) / baseline * 100).toFixed(2)
-        const color = p >= baseline ? '#ef4444' : '#10b981'
+        const color = p >= baseline ? c.up : c.down
         return `${t}<br/>价格 <b style="color:${color}">${p.toFixed(2)}</b> (${pct}%)<br/>成交量 ${vol ?? '-'} 手`
       }
     },
@@ -195,9 +201,9 @@ function buildOption(bars: BarItem[], baseline: number, liveTickPrice?: number, 
         type: 'category',
         data: FULL_SLOTS,
         boundaryGap: false,
-        axisLine: { onZero: false },
+        axisLine: { onZero: false, lineStyle: { color: c.border } },
         axisLabel: {
-          color: '#6b7280',
+          color: c.textMuted,
           interval: (idx: number, val: string) => val in LABEL_MAP,
           formatter: (val: string) => LABEL_MAP[val] || val
         },
@@ -207,6 +213,7 @@ function buildOption(bars: BarItem[], baseline: number, liveTickPrice?: number, 
         type: 'category',
         gridIndex: 1,
         data: FULL_SLOTS,
+        axisLine: { lineStyle: { color: c.border } },
         axisLabel: { show: false },
         axisTick: { show: false }
       }
@@ -217,10 +224,11 @@ function buildOption(bars: BarItem[], baseline: number, liveTickPrice?: number, 
         min: yMin,
         max: yMax,
         splitNumber: 6,
-        splitLine: { show: true, lineStyle: { color: '#f3f4f6' } },
+        splitLine: { show: true, lineStyle: { color: c.borderLight } },
+        axisLine: { lineStyle: { color: c.border } },
         axisLabel: {
           formatter: (v: number) => v.toFixed(2),
-          color: (v: number) => v > baseline ? '#ef4444' : v < baseline ? '#10b981' : '#6b7280'
+          color: (v: number) => v > baseline ? c.up : v < baseline ? c.down : c.textMuted
         }
       },
       { gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
@@ -233,13 +241,13 @@ function buildOption(bars: BarItem[], baseline: number, liveTickPrice?: number, 
         showSymbol: false,
         smooth: false,
         connectNulls: false,
-        lineStyle: { width: 1.5, color: '#3b82f6' },
-        areaStyle: { color: 'rgba(59, 130, 246, 0.08)' },
+        lineStyle: { width: 1.5, color: c.primary },
+        areaStyle: { color: c.primary + '26' },
         markLine: {
           symbol: 'none',
           silent: true,
-          lineStyle: { color: '#9ca3af', type: 'dashed', width: 1 },
-          data: [{ yAxis: baseline, label: { formatter: `昨收 ${baseline.toFixed(2)}`, color: '#6b7280', position: 'insideStartTop' } }]
+          lineStyle: { color: c.textMuted, type: 'dashed', width: 1 },
+          data: [{ yAxis: baseline, label: { formatter: `昨收 ${baseline.toFixed(2)}`, color: c.textMuted, position: 'insideStartTop' } }]
         },
         markPoint: tradeMarks.length ? {
           data: tradeMarks
@@ -252,7 +260,7 @@ function buildOption(bars: BarItem[], baseline: number, liveTickPrice?: number, 
         yAxisIndex: 1,
         data: volData,
         itemStyle: {
-          color: (p: any) => p.data[2] >= 0 ? '#ef4444' : '#10b981'
+          color: (p: any) => p.data[2] >= 0 ? c.up : c.down
         }
       }
     ]
@@ -318,6 +326,7 @@ watch(() => [props.code, props.lastClose], load)
 watch(() => props.currentPrice, redraw)  // 实时价变了直接重绘，不打网络
 watch(() => props.trades, redraw, { deep: true })
 watch(() => props.intervalMs, setupTimer)
+watch(() => theme.mode.value, redraw)
 </script>
 
 <template>
@@ -332,9 +341,9 @@ watch(() => props.intervalMs, setupTimer)
 .overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(255,255,255,0.7);
-  color: #6b7280;
+  background: color-mix(in srgb, var(--brand-surface) 70%, transparent);
+  color: var(--brand-text-secondary);
   pointer-events: none;
 }
-.overlay.error { color: #ef4444; background: rgba(255,255,255,0.4); }
+.overlay.error { color: var(--brand-up); }
 </style>

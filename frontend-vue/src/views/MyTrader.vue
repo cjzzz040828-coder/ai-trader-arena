@@ -3,7 +3,6 @@ import { computed, onMounted, onUnmounted, onActivated, onDeactivated, reactive,
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useTradeStore } from '@/stores/trade'
 import { api, type OrderVO } from '@/api'
-import LlmActivityPanel from '@/components/LlmActivityPanel.vue'
 
 defineOptions({ name: 'MyTrader' })
 
@@ -15,8 +14,6 @@ const currentQuote = ref<{ code: string; name: string; price: number; change_pct
 let timer: number | null = null
 let quoteDebounce: number | null = null
 
-const showLlmPanel = ref(true)
-
 const form = reactive({
   stockCode: '',
   side: 'BUY' as 'BUY' | 'SELL',
@@ -25,7 +22,6 @@ const form = reactive({
 })
 
 const trader = computed(() => store.currentTrader)
-const showSide = computed(() => showLlmPanel.value && trader.value?.strategyType === 'LLM')
 
 function fmt(n: number | null | undefined, digits = 2): string {
   if (n == null) return '-'
@@ -180,12 +176,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="my-trader" :class="{ 'with-side': showSide }">
+  <div class="my-trader">
     <div v-if="!trader" class="empty">加载中...</div>
 
     <template v-else>
       <div class="main-col">
-      <div class="header-card">
+      <el-card class="header-card" :body-style="{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '20px' }">
         <div class="title">
           <el-select v-if="store.traders.length > 1"
                      :model-value="store.currentTraderId"
@@ -222,23 +218,21 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="actions">
-          <el-button type="danger" @click="openDialog('BUY')">买入</el-button>
-          <el-button type="success" @click="openDialog('SELL')">卖出</el-button>
+          <el-button class="btn-buy" @click="openDialog('BUY')">买入</el-button>
+          <el-button class="btn-sell" @click="openDialog('SELL')">卖出</el-button>
           <el-button @click="store.refreshAll()">刷新</el-button>
-          <el-button v-if="trader.strategyType === 'LLM'" plain
-                     @click="showLlmPanel = !showLlmPanel">
-            {{ showLlmPanel ? '隐藏 AI 面板' : '显示 AI 面板' }}
-          </el-button>
         </div>
-      </div>
+      </el-card>
 
-      <div class="section">
-        <h3>持仓 ({{ store.positions.length }})</h3>
+      <el-card class="section" :body-style="{ padding: '12px 16px' }">
+        <template #header>
+          <h3>持仓 ({{ store.positions.length }})</h3>
+        </template>
         <el-table :data="store.positions" size="small" empty-text="暂无持仓">
           <el-table-column label="代码" width="180">
             <template #default="{ row }">
               <span style="font-weight: 600;">{{ store.stockName(row.stockCode) || '-' }}</span>
-              <span style="color: #9ca3af; margin-left: 6px; font-family: Consolas, monospace;">{{ row.stockCode }}</span>
+              <span class="stock-code">{{ row.stockCode }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="amount" label="数量" width="100" />
@@ -270,16 +264,18 @@ onUnmounted(() => {
             <template #default="{ row }">{{ fmtTime(row.updatedAt) }}</template>
           </el-table-column>
         </el-table>
-      </div>
+      </el-card>
 
-      <div class="section">
-        <h3>订单流水 ({{ store.orders.length }})</h3>
+      <el-card class="section" :body-style="{ padding: '12px 16px' }">
+        <template #header>
+          <h3>订单流水 ({{ store.orders.length }})</h3>
+        </template>
         <el-table :data="store.orders" size="small" empty-text="暂无订单" max-height="400">
           <el-table-column prop="id" label="ID" width="60" />
           <el-table-column label="股票" width="170">
             <template #default="{ row }">
               <span style="font-weight: 600;">{{ store.stockName(row.stockCode) || '-' }}</span>
-              <span style="color: #9ca3af; margin-left: 6px; font-family: Consolas, monospace;">{{ row.stockCode }}</span>
+              <span class="stock-code">{{ row.stockCode }}</span>
             </template>
           </el-table-column>
           <el-table-column label="方向" width="70">
@@ -294,7 +290,7 @@ onUnmounted(() => {
           </el-table-column>
           <el-table-column prop="amount" label="数量" width="80" />
           <el-table-column label="状态" width="100">
-            <template #default="{ row }">
+            <template #default="{ row }: { row: OrderVO }">
               <el-tag :type="statusType(row.status)" size="small">{{ STATUS_LABEL[row.status] || row.status }}</el-tag>
             </template>
           </el-table-column>
@@ -311,11 +307,8 @@ onUnmounted(() => {
             </template>
           </el-table-column>
         </el-table>
+      </el-card>
       </div>
-      </div>
-      <aside v-if="showSide" class="side-col">
-        <LlmActivityPanel :trader-id="trader.id" />
-      </aside>
     </template>
 
     <el-dialog v-model="dialogOpen" :title="form.side === 'BUY' ? '买入' : '卖出'" width="400px">
@@ -341,7 +334,7 @@ onUnmounted(() => {
             </span>
           </template>
           <template v-else>
-            <span style="color: #9ca3af;">未取到行情，请检查代码是否正确或网关是否运行</span>
+            <span class="placeholder">未取到行情，请检查代码是否正确或网关是否运行</span>
           </template>
         </div>
         <el-form-item label="限价">
@@ -353,7 +346,7 @@ onUnmounted(() => {
       </el-form>
       <template #footer>
         <el-button @click="dialogOpen = false">取消</el-button>
-        <el-button :type="form.side === 'BUY' ? 'danger' : 'success'" :loading="submitting" @click="submit">
+        <el-button :class="form.side === 'BUY' ? 'btn-buy' : 'btn-sell'" :loading="submitting" @click="submit">
           确认{{ form.side === 'BUY' ? '买入' : '卖出' }}
         </el-button>
       </template>
@@ -362,35 +355,61 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.my-trader { padding: 16px; height: 100%; overflow: auto; background: #f3f4f6; }
-.my-trader.with-side { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
+.my-trader { padding: 16px; height: 100%; overflow: auto; background: var(--brand-bg); }
 .main-col { min-width: 0; }
-.side-col { position: sticky; top: 0; align-self: start; height: calc(100vh - 32px); min-width: 0; }
-@media (max-width: 1200px) {
-  .my-trader.with-side { grid-template-columns: 1fr; }
-  .side-col { position: static; height: auto; max-height: 600px; }
-}
-.empty { text-align: center; padding: 60px; color: #6b7280; }
-.header-card {
-  background: #fff; padding: 16px 20px; border-radius: 8px;
-  display: flex; align-items: center; gap: 20px; margin-bottom: 16px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-}
+.empty { text-align: center; padding: 60px; color: var(--brand-text-secondary); }
+
+.header-card { border-radius: 8px; margin-bottom: 16px; }
 .title { display: flex; align-items: center; gap: 8px; min-width: 140px; }
-.title .name { font-size: 16px; font-weight: 600; }
+.title .name { font-size: 16px; font-weight: 600; color: var(--brand-text-primary); }
 .metrics { display: flex; flex: 1; gap: 24px; }
-.metric .label { font-size: 12px; color: #6b7280; }
-.metric .value { font-size: 16px; font-weight: 600; margin-top: 2px; }
-.up { color: #dc2626; }
-.down { color: #16a34a; }
+.metric .label { font-size: 12px; color: var(--brand-text-secondary); }
+.metric .value { font-size: 16px; font-weight: 600; margin-top: 2px; color: var(--brand-text-primary); }
+/* 显式覆盖：.metric .value (0,2,0) 比 .up/.down (0,1,0) 更具体，会盖住红/绿色。
+   用 .value.up/.value.down 把 specificity 提到 0,2,0，且写在后面赢平局。 */
+.metric .value.up { color: var(--brand-up); }
+.metric .value.down { color: var(--brand-down); }
+.up { color: var(--brand-up); }
+.down { color: var(--brand-down); }
 .actions { display: flex; gap: 8px; }
-.section { background: #fff; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px;
-           box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-.section h3 { margin: 0 0 8px; font-size: 14px; color: #374151; }
+
+.section { border-radius: 8px; margin-bottom: 16px; }
+.section :deep(.el-card__header) { padding: 10px 16px; }
+.section h3 { margin: 0; font-size: 14px; color: var(--brand-text-regular); font-weight: 600; }
+
+.stock-code {
+  color: var(--brand-text-placeholder);
+  margin-left: 6px;
+  font-family: Consolas, monospace;
+}
+
 .quote-tip {
   margin: -8px 0 12px 80px; padding: 6px 10px;
-  background: #f9fafb; border-radius: 4px; font-size: 13px;
+  background: var(--brand-bg-soft); border-radius: 4px; font-size: 13px;
 }
 .quote-tip .q-name { font-weight: 600; margin-right: 10px; }
 .quote-tip .q-price { font-family: Consolas, monospace; font-weight: 600; margin-right: 4px; }
+.quote-tip .placeholder { color: var(--brand-text-placeholder); }
+
+/* A 股语义按钮：买红卖绿（暗色科技感版） */
+.btn-buy {
+  --el-button-bg-color: var(--brand-up);
+  --el-button-border-color: var(--brand-up);
+  --el-button-hover-bg-color: #fca5a5;
+  --el-button-hover-border-color: #fca5a5;
+  --el-button-text-color: #fff;
+  --el-button-active-bg-color: #ef4444;
+  --el-button-active-border-color: #ef4444;
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.22);
+}
+.btn-sell {
+  --el-button-bg-color: var(--brand-down);
+  --el-button-border-color: var(--brand-down);
+  --el-button-hover-bg-color: #6ee7b7;
+  --el-button-hover-border-color: #6ee7b7;
+  --el-button-text-color: #fff;
+  --el-button-active-bg-color: #10b981;
+  --el-button-active-border-color: #10b981;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.22);
+}
 </style>

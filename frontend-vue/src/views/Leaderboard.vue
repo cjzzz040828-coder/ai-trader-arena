@@ -115,14 +115,14 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.leaderboard { padding: 16px; height: 100%; overflow: auto; background: #f3f4f6; }
+.leaderboard { padding: 16px; height: 100%; overflow: auto; background: var(--brand-bg); }
 .header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.header h2 { margin: 0; font-size: 18px; }
-.header .hint { color: #6b7280; font-size: 13px; }
+.header h2 { margin: 0; font-size: 18px; color: var(--brand-text-primary); }
+.header .hint { color: var(--brand-text-secondary); font-size: 13px; }
 .header .spacer { flex: 1; }
-.up { color: #dc2626; font-weight: 600; }
-.down { color: #16a34a; font-weight: 600; }
-.rank-top { color: #f59e0b; font-weight: 700; font-size: 16px; }
-:deep(.el-table .mine) { background: #fef9c3 !important; }
-:deep(.el-table .mine:hover > td) { background: #fde68a !important; }
+.up { color: var(--brand-up); font-weight: 600; }
+.down { color: var(--brand-down); font-weight: 600; }
+.rank-top { color: #fbbf24; font-weight: 700; font-size: 16px; text-shadow: 0 0 8px rgba(251, 191, 36, 0.6); }
+:deep(.el-table .mine) { background: rgba(251, 191, 36, 0.12) !important; }
+:deep(.el-table .mine:hover > td) { background: rgba(251, 191, 36, 0.22) !important; }
 </style>

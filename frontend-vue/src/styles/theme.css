@@ -1,0 +1,192 @@
+/**
+ * 全站主题：亮/暗双套
+ * - 默认亮色（:root），暗色挂在 html.dark 下
+ * - 主色：蓝 #3b82f6（金融常用）
+ * - A 股红涨绿跌保留：亮色用偏深的红绿，暗色用偏亮的红绿
+ * - 去掉所有"青色发光"box-shadow / text-shadow，走中性投影
+ */
+
+/* ==================== 亮色（默认） ==================== */
+:root {
+  /* Element Plus 主色 */
+  --el-color-primary: #3b82f6;
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: rgba(59, 130, 246, 0.10);
+  --el-color-primary-dark-2: #2563eb;
+
+  /* 自定义品牌变量 */
+  --brand-primary: #3b82f6;
+  --brand-primary-hover: #2563eb;
+  --brand-primary-soft: rgba(59, 130, 246, 0.10);
+  --brand-primary-glow: 0 0 0 3px rgba(59, 130, 246, 0.20);
+
+  /* A 股红涨绿跌（亮底） */
+  --brand-up: #dc2626;
+  --brand-up-soft: rgba(220, 38, 38, 0.10);
+  --brand-down: #16a34a;
+  --brand-down-soft: rgba(22, 163, 74, 0.10);
+  --brand-neutral: #64748b;
+
+  /* 表面与背景 */
+  --brand-bg: #f8fafc;
+  --brand-bg-soft: #f1f5f9;
+  --brand-surface: #ffffff;
+  --brand-surface-hover: #f8fafc;
+  --brand-border: #e2e8f0;
+  --brand-border-light: #f1f5f9;
+
+  /* 文字层级 */
+  --brand-text-primary: #0f172a;
+  --brand-text-regular: #334155;
+  --brand-text-secondary: #64748b;
+  --brand-text-placeholder: #94a3b8;
+
+  /* 顶栏：白底 + 细底线 */
+  --brand-header-bg: #ffffff;
+  --brand-header-text: #0f172a;
+  --brand-header-text-muted: #64748b;
+  --brand-header-hover: #f1f5f9;
+  --brand-header-active: var(--brand-primary);
+
+  /* 阴影：中性灰 */
+  --brand-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --brand-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --brand-shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
+}
+
+/* ==================== 暗色 ==================== */
+html.dark {
+  --el-color-primary: #60a5fa;
+  --el-color-primary-light-3: #93c5fd;
+  --el-color-primary-light-5: #bfdbfe;
+  --el-color-primary-light-7: #dbeafe;
+  --el-color-primary-light-8: #eff6ff;
+  --el-color-primary-light-9: rgba(96, 165, 250, 0.12);
+  --el-color-primary-dark-2: #3b82f6;
+
+  --el-bg-color: #1e293b;
+  --el-bg-color-page: #0f172a;
+  --el-bg-color-overlay: #1e293b;
+  --el-text-color-primary: #f1f5f9;
+  --el-text-color-regular: #cbd5e1;
+  --el-text-color-secondary: #94a3b8;
+  --el-text-color-placeholder: #64748b;
+  --el-border-color: #334155;
+  --el-border-color-light: #243042;
+  --el-border-color-lighter: #1e293b;
+  --el-fill-color: #1e293b;
+  --el-fill-color-light: #243042;
+  --el-fill-color-lighter: #1a2438;
+  --el-fill-color-blank: #1e293b;
+  --el-mask-color: rgba(2, 6, 23, 0.7);
+  --el-box-shadow-light: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --el-box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+
+  --brand-primary: #60a5fa;
+  --brand-primary-hover: #93c5fd;
+  --brand-primary-soft: rgba(96, 165, 250, 0.14);
+  --brand-primary-glow: 0 0 0 3px rgba(96, 165, 250, 0.25);
+
+  /* A 股红涨绿跌（暗底用更亮的红绿） */
+  --brand-up: #f87171;
+  --brand-up-soft: rgba(248, 113, 113, 0.14);
+  --brand-down: #34d399;
+  --brand-down-soft: rgba(52, 211, 153, 0.14);
+  --brand-neutral: #94a3b8;
+
+  --brand-bg: #0f172a;
+  --brand-bg-soft: #1a2438;
+  --brand-surface: #1e293b;
+  --brand-surface-hover: #243042;
+  --brand-border: #334155;
+  --brand-border-light: #243042;
+
+  --brand-text-primary: #f1f5f9;
+  --brand-text-regular: #cbd5e1;
+  --brand-text-secondary: #94a3b8;
+  --brand-text-placeholder: #64748b;
+
+  --brand-header-bg: #0f172a;
+  --brand-header-text: #f1f5f9;
+  --brand-header-text-muted: #94a3b8;
+  --brand-header-hover: rgba(255, 255, 255, 0.06);
+  --brand-header-active: var(--brand-primary);
+
+  --brand-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --brand-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --brand-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+/* ==================== 全局基底 ==================== */
+html, body {
+  background: var(--brand-bg);
+  color: var(--brand-text-primary);
+}
+
+/* 顶栏底部细分割线 */
+.app-header {
+  border-bottom: 1px solid var(--brand-border);
+}
+
+/* el-card 在暗色下的边框/hover */
+html.dark .el-card {
+  background: var(--brand-surface);
+  border-color: var(--brand-border);
+}
+html.dark .el-card.is-hover-shadow:hover {
+  box-shadow: var(--brand-shadow-md);
+  border-color: var(--brand-border);
+}
+
+/* el-table 暗色行 hover */
+html.dark .el-table tr:hover > td.el-table__cell {
+  background: var(--brand-surface-hover) !important;
+}
+html.dark .el-table th.el-table__cell,
+html.dark .el-table tr {
+  background: var(--brand-surface);
+}
+html.dark .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: var(--brand-bg-soft);
+}
+
+/* el-dialog 暗色覆盖 */
+html.dark .el-dialog {
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
+  box-shadow: var(--brand-shadow-lg);
+}
+
+/* el-input / textarea 暗色 */
+html.dark .el-input__wrapper,
+html.dark .el-textarea__inner {
+  background-color: var(--brand-bg-soft);
+  box-shadow: 0 0 0 1px var(--brand-border) inset;
+}
+html.dark .el-input__wrapper:hover {
+  box-shadow: 0 0 0 1px var(--brand-primary) inset;
+}
+html.dark .el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--brand-primary) inset;
+}
+html.dark .el-input__inner {
+  color: var(--brand-text-primary);
+}
+
+/* 原生 input / select / textarea 暗色化 */
+html.dark input,
+html.dark select,
+html.dark textarea {
+  background: var(--brand-bg-soft);
+  color: var(--brand-text-primary);
+  border-color: var(--brand-border);
+}
+html.dark input:focus,
+html.dark select:focus,
+html.dark textarea:focus {
+  outline: none;
+  border-color: var(--brand-primary);
+}

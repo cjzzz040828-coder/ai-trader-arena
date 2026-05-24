@@ -2,8 +2,11 @@
 import { onMounted, onBeforeUnmount, ref, watch, shallowRef } from 'vue'
 import * as echarts from 'echarts'
 import { api, type BarItem, type TradeMarker } from '@/api'
+import { readChartColors } from '@/composables/chartTheme'
+import { useTheme } from '@/composables/theme'
 
 const props = defineProps<{ code: string; frequency?: number; count?: number; trades?: TradeMarker[] }>()
+const theme = useTheme()
 
 const chartEl = ref<HTMLDivElement | null>(null)
 const chart = shallowRef<echarts.ECharts | null>(null)
@@ -19,6 +22,7 @@ function normalizeFilledAt(s: string): string {
 /** 找到 bar.datetime <= filledAt 的最后一根 bar，把买卖点钉在那根 K 线上 */
 function buildTradeMarks(bars: BarItem[], trades: TradeMarker[]) {
   if (!bars.length || !trades.length) return []
+  const c = readChartColors()
   const marks: any[] = []
   for (const t of trades) {
     const ft = normalizeFilledAt(t.filledAt)
@@ -40,15 +44,15 @@ function buildTradeMarks(bars: BarItem[], trades: TradeMarker[]) {
       symbolSize: [16, 18],
       symbolRotate: isBuy ? 0 : 180,
       itemStyle: {
-        color: isBuy ? '#ef4444' : '#10b981',
-        borderColor: '#fff',
+        color: isBuy ? c.up : c.down,
+        borderColor: c.surface,
         borderWidth: 1
       },
       label: {
         show: true,
         position: isBuy ? 'bottom' : 'top',
         formatter: isBuy ? 'B' : 'S',
-        color: isBuy ? '#ef4444' : '#10b981',
+        color: isBuy ? c.up : c.down,
         fontSize: 11,
         fontWeight: 700,
         distance: 3
@@ -60,6 +64,7 @@ function buildTradeMarks(bars: BarItem[], trades: TradeMarker[]) {
 }
 
 function buildOption(bars: BarItem[], trades: TradeMarker[]) {
+  const c = readChartColors()
   const dates = bars.map(b => b.datetime)
   const klineData = bars.map(b => [b.open, b.close, b.low, b.high])
   const volumes = bars.map((b, i) => [i, b.vol, b.close >= b.open ? 1 : -1])
@@ -76,14 +81,15 @@ function buildOption(bars: BarItem[], trades: TradeMarker[]) {
 
   return {
     animation: false,
-    backgroundColor: '#fff',
-    legend: { data: ['K线', 'MA5', 'MA10', 'MA20'], top: 5 },
+    backgroundColor: 'transparent',
+    textStyle: { color: c.textRegular },
+    legend: { data: ['K线', 'MA5', 'MA10', 'MA20'], top: 5, textStyle: { color: c.textRegular } },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' },
-      backgroundColor: 'rgba(255,255,255,0.95)',
-      borderColor: '#e5e7eb',
-      textStyle: { color: '#111' },
+      axisPointer: { type: 'cross', lineStyle: { color: c.primary }, crossStyle: { color: c.primary } },
+      backgroundColor: c.tooltipBg,
+      borderColor: c.primary,
+      textStyle: { color: c.textRegular },
       formatter: (params: any) => {
         const arr = Array.isArray(params) ? params : [params]
         // markPoint 单独触发时 componentType === 'markPoint'
@@ -91,7 +97,7 @@ function buildOption(bars: BarItem[], trades: TradeMarker[]) {
         if (mp && mp.data?._trade) {
           const t = mp.data._trade as TradeMarker
           const isBuy = t.side === 'BUY'
-          const color = isBuy ? '#ef4444' : '#10b981'
+          const color = isBuy ? c.up : c.down
           return `<b style="color:${color}">${isBuy ? '买入' : '卖出'}</b> ${t.amount} 股<br/>价格 <b>${t.price.toFixed(3)}</b><br/>时间 ${normalizeFilledAt(t.filledAt)}`
         }
         // 默认 axis tooltip：用 ECharts 自带格式
@@ -100,20 +106,20 @@ function buildOption(bars: BarItem[], trades: TradeMarker[]) {
     },
     axisPointer: { link: [{ xAxisIndex: 'all' }] },
     grid: [
-      { left: '8%', right: '4%', top: 40, height: '60%' },
-      { left: '8%', right: '4%', top: '76%', height: '16%' }
+      { left: '8%', right: '4%', top: 40, height: '56%' },
+      { left: '8%', right: '4%', top: '72%', height: '14%' }
     ],
     xAxis: [
-      { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, axisLabel: { show: false } },
-      { type: 'category', gridIndex: 1, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false } }
+      { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false, lineStyle: { color: c.border } }, splitLine: { show: false }, axisLabel: { show: false } },
+      { type: 'category', gridIndex: 1, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false, lineStyle: { color: c.border } }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { color: c.textMuted } }
     ],
     yAxis: [
-      { scale: true, splitArea: { show: true } },
+      { scale: true, splitArea: { show: false }, splitLine: { lineStyle: { color: c.borderLight } }, axisLine: { lineStyle: { color: c.border } }, axisLabel: { color: c.textMuted } },
       { gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
     ],
     dataZoom: [
       { type: 'inside', xAxisIndex: [0, 1], start: 60, end: 100 },
-      { show: true, type: 'slider', xAxisIndex: [0, 1], top: '94%', start: 60, end: 100 }
+      { show: true, type: 'slider', xAxisIndex: [0, 1], bottom: 8, height: 20, start: 60, end: 100, backgroundColor: c.bgSoft, borderColor: c.border, fillerColor: c.primary + '33', handleStyle: { color: c.primary }, textStyle: { color: c.textMuted } }
     ],
     series: [
       {
@@ -121,10 +127,10 @@ function buildOption(bars: BarItem[], trades: TradeMarker[]) {
         type: 'candlestick',
         data: klineData,
         itemStyle: {
-          color: '#ef4444',
-          color0: '#10b981',
-          borderColor: '#ef4444',
-          borderColor0: '#10b981'
+          color: c.up,
+          color0: c.down,
+          borderColor: c.up,
+          borderColor0: c.down
         },
         markPoint: tradeMarks.length ? {
           symbol: 'triangle',
@@ -132,9 +138,9 @@ function buildOption(bars: BarItem[], trades: TradeMarker[]) {
           data: tradeMarks
         } : undefined
       },
-      { name: 'MA5', type: 'line', data: ma(5), smooth: true, lineStyle: { width: 1, color: '#f59e0b' }, showSymbol: false },
-      { name: 'MA10', type: 'line', data: ma(10), smooth: true, lineStyle: { width: 1, color: '#3b82f6' }, showSymbol: false },
-      { name: 'MA20', type: 'line', data: ma(20), smooth: true, lineStyle: { width: 1, color: '#8b5cf6' }, showSymbol: false },
+      { name: 'MA5', type: 'line', data: ma(5), smooth: true, lineStyle: { width: 1.5, color: c.textRegular }, showSymbol: false },
+      { name: 'MA10', type: 'line', data: ma(10), smooth: true, lineStyle: { width: 1.5, color: c.primary }, showSymbol: false },
+      { name: 'MA20', type: 'line', data: ma(20), smooth: true, lineStyle: { width: 1.5, color: '#fbbf24' }, showSymbol: false },
       {
         name: '成交量',
         type: 'bar',
@@ -142,7 +148,7 @@ function buildOption(bars: BarItem[], trades: TradeMarker[]) {
         yAxisIndex: 1,
         data: volumes,
         itemStyle: {
-          color: (params: any) => params.data[2] >= 0 ? '#ef4444' : '#10b981'
+          color: (params: any) => params.data[2] >= 0 ? c.up : c.down
         }
       }
     ]
@@ -193,6 +199,7 @@ onBeforeUnmount(() => {
 
 watch(() => [props.code, props.frequency], load)
 watch(() => props.trades, redrawMarks, { deep: true })
+watch(() => theme.mode.value, redrawMarks)
 </script>
 
 <template>
@@ -207,8 +214,8 @@ watch(() => props.trades, redrawMarks, { deep: true })
 .overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(255,255,255,0.7);
-  color: #6b7280;
+  background: color-mix(in srgb, var(--brand-surface) 70%, transparent);
+  color: var(--brand-text-secondary);
 }
-.overlay.error { color: #ef4444; }
+.overlay.error { color: var(--brand-up); }
 </style>

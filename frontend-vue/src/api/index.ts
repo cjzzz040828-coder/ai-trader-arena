@@ -83,6 +83,8 @@ export interface WatchlistItem {
 export interface WatchlistResp {
   count: number
   data: WatchlistItem[]
+  /** 分组字典：key=分组名（.sel 文件 stem 或 stockblock.ini 分组名），value=该组的代码列表 */
+  groups?: Record<string, string[]>
 }
 
 export interface AuthUser {
@@ -113,6 +115,10 @@ export interface TraderVO {
   llmModel: string | null
   llmPrompt: string | null
   llmApiKeySet: boolean
+  indicatorConfigJson: string | null
+  scriptCode: string | null
+  poolName: string | null
+  templateId: number | null
 }
 
 export interface CreateTraderReq {
@@ -126,6 +132,9 @@ export interface CreateTraderReq {
   llmApiKey?: string
   llmModel?: string
   llmPrompt?: string
+  indicatorConfigJson?: string
+  scriptCode?: string
+  poolName?: string
 }
 
 export interface UpdateTraderReq {
@@ -139,6 +148,15 @@ export interface UpdateTraderReq {
   llmApiKey?: string
   llmModel?: string
   llmPrompt?: string
+  indicatorConfigJson?: string
+  scriptCode?: string
+  poolName?: string
+}
+
+export interface ScriptTestResult {
+  ok: boolean
+  message: string
+  sample?: string
 }
 
 export interface LeaderboardItem {
@@ -164,6 +182,16 @@ export interface TestLlmResult {
   error: string | null
 }
 
+export interface DecideOrderDetail {
+  id: number
+  code: string
+  name: string | null
+  side: 'BUY' | 'SELL'
+  amount: number
+  price: number
+  status: 'PENDING' | 'FILLED' | 'CANCELLED' | 'REJECTED'
+}
+
 export interface DecideNowResult {
   ok: boolean
   strategy: string
@@ -171,7 +199,9 @@ export interface DecideNowResult {
   watchlistSize: number
   elapsedMs: number
   newOrders: number
+  filledNow: number
   totalPending: number
+  newOrderDetails: DecideOrderDetail[]
   message: string
 }
 
@@ -240,6 +270,14 @@ export interface BacktestTaskVO {
   totalTrades: number | null
   maxDrawdownPct: number | null
   equityCurveJson: string | null
+  sharpeRatio: number | null
+  sortinoRatio: number | null
+  calmarRatio: number | null
+  annualReturnPct: number | null
+  winRatePct: number | null
+  profitLossRatio: number | null
+  benchmarkCurveJson: string | null
+  monthlyReturnsJson: string | null
   createdAt: string
   startedAt: string | null
   finishedAt: string | null
@@ -249,10 +287,12 @@ export interface BacktestTradeVO {
   id: number
   tradeDate: string
   stockCode: string
+  stockName: string | null
   side: 'BUY' | 'SELL'
   amount: number
   price: number
   balanceAfter: number
+  costPrice: number | null
   reason: string
 }
 
@@ -264,6 +304,7 @@ export type LlmActivityPhase =
   | 'failed'
   | 'cancel_requested'
   | 'cancelled'
+  | 'purged'
 
 export interface LlmActivity {
   id?: number
@@ -278,7 +319,109 @@ export interface LlmActivity {
   argsJson: string | null
   resultJson: string | null
   message: string | null
+  promptJson: string | null
   createdAt: string
+}
+
+export interface StrategyTemplateMetrics {
+  instanceCount: number
+  avgReturnPct: number
+  totalTrades: number
+  winRate: number
+}
+
+export interface StrategyTemplateVO {
+  id: number
+  code: string
+  name: string
+  description: string
+  strategyType: 'MA' | 'LLM'
+  params: Record<string, any>
+  tags: string[]
+  isOfficial: boolean
+  sortOrder: number
+  metrics: StrategyTemplateMetrics
+}
+
+export interface InstantiateTemplateReq {
+  traderName: string
+  llmApiKey?: string
+}
+
+// ============ 选股池（pool） ============
+export interface PoolRules {
+  markets: string[]
+  exclude_st: boolean
+  exclude_delisting: boolean
+  min_price: number
+  max_price: number
+  min_market_cap: number
+  max_market_cap: number
+}
+
+export interface PoolDefinition {
+  name: string
+  displayName: string
+  rules: PoolRules
+  autoRefresh: boolean
+  createdAt: string
+}
+
+export interface PoolStockEntry {
+  code: string
+  name: string
+  market?: string
+  segment?: string
+  price?: number
+  liutongshizhi?: number
+  liutongguben?: number
+}
+
+export interface PoolSnapshotStats {
+  step1_after_market_filter: number
+  step2_after_price_filter: number
+  step3_after_mktcap_filter: number
+  elapsed_seconds: number
+}
+
+export interface PoolStatusResp {
+  exists: boolean
+  pool_name: string
+  definition: PoolDefinition | null
+  updated_at?: string
+  count?: number
+  rules?: PoolRules
+  stats?: PoolSnapshotStats
+  building: boolean
+  is_stale?: boolean
+}
+
+export interface PoolHistoryItem {
+  date: string
+  updated_at: string
+  count: number
+}
+
+export interface PoolHistorySnapshot {
+  pool_name: string
+  updated_at: string
+  count: number
+  rules: PoolRules
+  stats: PoolSnapshotStats
+  codes: PoolStockEntry[]
+}
+
+export interface CreatePoolReq {
+  name: string
+  displayName?: string
+  rules: PoolRules
+  autoRefresh?: boolean
+}
+
+export interface UpdatePoolReq {
+  displayName?: string
+  rules?: PoolRules
+  autoRefresh?: boolean
 }
 
 export const api = {
@@ -316,7 +459,9 @@ export const api = {
     placeOrder: (req: PlaceOrderReq) =>
       http.post('/orders', req) as unknown as Promise<OrderVO>,
     cancelOrder: (id: number) =>
-      http.post(`/orders/${id}/cancel`) as unknown as Promise<OrderVO>
+      http.post(`/orders/${id}/cancel`) as unknown as Promise<OrderVO>,
+    testScript: (scriptCode: string) =>
+      http.post('/traders/test-script', { scriptCode }, { timeout: 10000 }) as unknown as Promise<ScriptTestResult>
   },
   leaderboard: (limit = 100) =>
     http.get('/leaderboard', { params: { limit } }) as unknown as Promise<LeaderboardItem[]>,
@@ -338,6 +483,46 @@ export const api = {
     streamUrl: (traderId: number) => {
       const token = localStorage.getItem('token') || ''
       return `/api/traders/${traderId}/llm-stream?token=${encodeURIComponent(token)}`
-    }
+    },
+    /** dashboard 用：订阅当前用户所有 LLM trader 的活动流（用户级 SSE） */
+    userStreamUrl: () => {
+      const token = localStorage.getItem('token') || ''
+      return `/api/llm-activity/stream?token=${encodeURIComponent(token)}`
+    },
+    /** dashboard 基线：一次拉所有 LLM trader 最近 N 条活动，按 traderId 分组 */
+    recent: (perTrader = 20) =>
+      http.get('/llm-activity/recent', { params: { perTrader } }) as unknown as Promise<Record<number, LlmActivity[]>>,
+    /** 清空单 trader 的全部 LLM 活动（不可恢复），进行中决策不会被中断 */
+    clearForTrader: (traderId: number) =>
+      http.delete(`/traders/${traderId}/llm-activities`) as unknown as Promise<{ deleted: number; traderId: number }>,
+    /** 清空当前用户全部 LLM 活动（不可恢复） */
+    clearAll: () =>
+      http.delete('/llm-activity') as unknown as Promise<{ deleted: number }>
+  },
+  strategyTemplates: {
+    list: () =>
+      http.get('/strategy-templates') as unknown as Promise<StrategyTemplateVO[]>,
+    get: (id: number) =>
+      http.get(`/strategy-templates/${id}`) as unknown as Promise<StrategyTemplateVO>,
+    instantiate: (id: number, req: InstantiateTemplateReq) =>
+      http.post(`/strategy-templates/${id}/instantiate`, req) as unknown as Promise<TraderVO>
+  },
+  pool: {
+    list: () =>
+      http.get('/pool') as unknown as Promise<{ pools: PoolDefinition[] }>,
+    create: (req: CreatePoolReq) =>
+      http.post('/pool', req) as unknown as Promise<PoolDefinition>,
+    update: (name: string, req: UpdatePoolReq) =>
+      http.put(`/pool/${name}`, req) as unknown as Promise<PoolDefinition>,
+    delete: (name: string) =>
+      http.delete(`/pool/${name}`) as unknown as Promise<{ ok: boolean }>,
+    status: (name: string) =>
+      http.get(`/pool/${name}/status`) as unknown as Promise<PoolStatusResp>,
+    rebuild: (name: string) =>
+      http.post(`/pool/${name}/rebuild`, null, { timeout: 5000 }) as unknown as Promise<{ ok: boolean; message: string }>,
+    history: (name: string) =>
+      http.get(`/pool/${name}/history`) as unknown as Promise<{ name: string; history: PoolHistoryItem[] }>,
+    historyDetail: (name: string, date: string) =>
+      http.get(`/pool/${name}/history/${date}`) as unknown as Promise<PoolHistorySnapshot>
   }
 }
