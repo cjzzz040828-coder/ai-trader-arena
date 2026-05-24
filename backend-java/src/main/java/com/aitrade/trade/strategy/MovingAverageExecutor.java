@@ -118,11 +118,17 @@ public class MovingAverageExecutor implements StrategyExecutor {
         return sum / n;
     }
 
-    /** 把 todayPrice 拼到 closes 末尾后，取末 n 个的平均。 */
+    /**
+     * 取最近 n 个 close 的均值，但用 todayPrice 替换末尾那根（=bars 最后一根=今日 partial close）。
+     *
+     * 调用约定：closes 末尾是"今日"那根（实盘 mootdx 日 K 盘中即为今日 partial，回测里 BacktestContext.bars
+     * 也明确含 today）。所以正确算法是：取 [length-n .. length-2] 共 n-1 个老 close + todayPrice = n 个值。
+     * 不能用"追加"的方式（length-n+1 .. length-1 + todayPrice），那样会把今日 close 算两次。
+     */
     private double avgTailWithToday(double[] closes, int n, double todayPrice) {
-        if (closes.length < n - 1) return 0.0;
+        if (closes.length < n) return 0.0;
         double sum = todayPrice;
-        for (int i = closes.length - (n - 1); i < closes.length; i++) sum += closes[i];
+        for (int i = closes.length - n; i < closes.length - 1; i++) sum += closes[i];
         return BigDecimal.valueOf(sum).divide(BigDecimal.valueOf(n), 6, RoundingMode.HALF_UP).doubleValue();
     }
 }

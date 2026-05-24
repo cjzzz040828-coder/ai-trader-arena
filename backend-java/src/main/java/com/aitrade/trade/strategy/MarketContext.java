@@ -27,10 +27,16 @@ public class MarketContext {
     protected final Map<String, Map<String, Object>> snapshotByCode;
     private final boolean marketOpen;
     private final boolean actualMarketOpen;
+    private final boolean premarket;
+    private final String marketStatus;
     protected final Map<String, List<Map<String, Object>>> barsCache = new HashMap<>();
 
     public MarketContext(PythonGatewayClient gateway) {
-        this(gateway, false);
+        this(gateway, false, null);
+    }
+
+    public MarketContext(PythonGatewayClient gateway, boolean forceOpen) {
+        this(gateway, forceOpen, null);
     }
 
     /** 子类直接喂数据用（回测）。gateway=null 时父类 bars() 不可调用，子类必须 override。 */
@@ -42,15 +48,22 @@ public class MarketContext {
         this.snapshotByCode = snapshots;
         this.actualMarketOpen = marketOpen;
         this.marketOpen = marketOpen;
+        this.premarket = false;
+        this.marketStatus = marketOpen ? "OPEN" : "CLOSED";
     }
 
+    /**
+     * @param poolName 指定从哪个 stock pool 拉 watchlist；null/blank 走默认 watchlist。
+     */
     @SuppressWarnings("unchecked")
-    public MarketContext(PythonGatewayClient gateway, boolean forceOpen) {
+    public MarketContext(PythonGatewayClient gateway, boolean forceOpen, String poolName) {
         this.gateway = gateway;
 
         List<String> codes = new ArrayList<>();
         try {
-            Map<String, Object> wl = gateway.watchlist();
+            Map<String, Object> wl = (poolName == null || poolName.isBlank())
+                    ? gateway.watchlist()
+                    : gateway.watchlist(poolName);
             Object data = wl == null ? null : wl.get("data");
             if (data instanceof List<?> arr) {
                 for (Object item : arr) {
@@ -61,17 +74,21 @@ public class MarketContext {
                 }
             }
         } catch (Exception e) {
-            log.warn("[strategy-ctx] watchlist failed: {}", e.getMessage());
+            log.warn("[strategy-ctx] watchlist(pool={}) failed: {}", poolName, e.getMessage());
         }
         this.watchlistCodes = Collections.unmodifiableList(codes);
 
         Map<String, Map<String, Object>> snapshots = new HashMap<>();
         boolean realOpen = false;
+        boolean isPremarket = false;
+        String status = "UNKNOWN";
         if (!codes.isEmpty()) {
             try {
                 SnapshotResponse snap = gateway.snapshot(String.join(",", codes));
                 if (snap != null) {
-                    realOpen = "OPEN".equalsIgnoreCase(snap.getMarketStatus());
+                    status = snap.getMarketStatus() == null ? "UNKNOWN" : snap.getMarketStatus().toUpperCase();
+                    realOpen = "OPEN".equals(status);
+                    isPremarket = "PREMARKET".equals(status);
                     if (snap.getData() != null) {
                         for (Map<String, Object> row : snap.getData()) {
                             Object code = row.get("code");
@@ -85,7 +102,10 @@ public class MarketContext {
         }
         this.snapshotByCode = snapshots;
         this.actualMarketOpen = realOpen;
-        this.marketOpen = forceOpen || realOpen;
+        // 虚拟撮合系统：PREMARKET 也允许策略决策与挂 PENDING 单，开盘后由 MatchEngine 撮合。
+        this.premarket = isPremarket;
+        this.marketStatus = status;
+        this.marketOpen = forceOpen || realOpen || isPremarket;
         if (forceOpen && !realOpen) {
             log.info("[strategy-ctx] forceOpen=true, actual market is CLOSED — strategy will run with last fallback snapshot");
         }
@@ -93,6 +113,8 @@ public class MarketContext {
 
     public boolean isMarketOpen() { return marketOpen; }
     public boolean isActualMarketOpen() { return actualMarketOpen; }
+    public boolean isPremarket() { return premarket; }
+    public String marketStatus() { return marketStatus; }
 
     public List<String> watchlist() { return watchlistCodes; }
 
