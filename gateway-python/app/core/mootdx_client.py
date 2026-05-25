@@ -151,6 +151,16 @@ class MootdxClient:
                 ALL_MARKET_STOCKS.clear()
                 ALL_MARKET_STOCKS.extend(collected)
             logger.info(f"[mootdx] loaded {count} new names, total names={len(STOCK_NAMES)}, all_market_stocks={len(ALL_MARKET_STOCKS)}")
+            # selfstock 在 mootdx ready 后立刻被前端拉取，那时全市场名表还没加载完（晚 5~10s），
+            # 它会把 name=code 的结果写进自己的 _cache 而且按 mtime 校验不会自动失效。
+            # 这里在名表加载完成后主动清掉 selfstock 缓存，让下次请求重新走 STOCK_NAMES.get。
+            try:
+                from app.core import selfstock as _ss
+                _ss._cache = None
+                _ss._cache_mtime = 0
+                _ss._cache_groups = {}
+            except Exception as e:
+                logger.warning(f"[mootdx] reset selfstock cache failed: {e}")
         except Exception as e:
             logger.warning(f"[mootdx] load_stock_names error: {e}")
 
