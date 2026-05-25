@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * 虚拟撮合引擎。每次 tick：
@@ -52,13 +53,13 @@ public class MatchEngine {
         for (TradeOrder o : pending) codes.add(o.getStockCode());
         for (Position p : allPositions) codes.add(p.getStockCode());
 
-        Map<String, BigDecimal> priceMap = new HashMap<>();
+        Map<String, MarketRow> marketMap = new HashMap<>();
         boolean marketOpen = false;
         if (!codes.isEmpty()) {
             try {
                 SnapshotResponse snap = gateway.snapshot(String.join(",", codes));
                 marketOpen = "OPEN".equalsIgnoreCase(snap.getMarketStatus());
-                priceMap = extractPrices(snap);
+                marketMap = extractMarketData(snap);
             } catch (Exception e) {
                 log.warn("[match] snapshot failed: {}", e.getMessage());
                 return;
@@ -70,33 +71,53 @@ public class MatchEngine {
         }
 
         for (TradeOrder o : pending) {
-            BigDecimal latest = priceMap.get(o.getStockCode());
-            if (latest == null || latest.signum() <= 0) continue;
+            MarketRow row = marketMap.get(o.getStockCode());
+            if (row == null || row.price == null || row.price.signum() <= 0) continue;
             try {
                 final Long orderId = o.getId();
-                final BigDecimal price = latest;
+                final MarketRow rowFinal = row;
                 // 共享 TraderLockRegistry：与 OrderService.place/cancel 互斥，
                 // 防止"撮合 fillOrder"和"用户/LLM 撤单"并发改 trader.balance/frozen，
                 // 破坏资金守恒不变量。
-                lockRegistry.withLockVoid(o.getTraderId(), () -> fillOrderInNewTx(orderId, price));
+                lockRegistry.withLockVoid(o.getTraderId(), () -> fillOrderInNewTx(orderId, rowFinal));
             } catch (Exception e) {
                 log.error("[match] fill order {} failed: {}", o.getId(), e.getMessage(), e);
             }
         }
 
+        // revalue 只需要 price，把 marketMap 抽成纯 priceMap
+        Map<String, BigDecimal> priceMap = new HashMap<>();
+        for (Map.Entry<String, MarketRow> e : marketMap.entrySet()) {
+            priceMap.put(e.getKey(), e.getValue().price);
+        }
         revalueInNewTx(priceMap);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void fillOrderInNewTx(Long orderId, BigDecimal latest) {
+    public void fillOrderInNewTx(Long orderId, MarketRow row) {
         TradeOrder o = tradeOrderMapper.selectById(orderId);
         if (o == null || !"PENDING".equals(o.getStatus())) return;
         AiTrader trader = aiTraderMapper.selectById(o.getTraderId());
         if (trader == null) return;
 
+        BigDecimal latest = row.price;
         boolean isBuy = "BUY".equals(o.getSide());
         if (isBuy && o.getPrice().compareTo(latest) < 0) return;
         if (!isBuy && o.getPrice().compareTo(latest) > 0) return;
+
+        // ===== 涨跌停约束：模拟真实排队，不再无脑成交 =====
+        // 真实 A 股涨停时只有少量卖单（甚至零卖单 = 一字板），买单排队，绝大部分挂不上。
+        // 简化模型：
+        //   - 一字板（涨停且 ask_vol1==0 / 跌停且 bid_vol1==0）→ 全拒，保留 PENDING
+        //   - 触板但有少量盘口（≥0.99 × 涨跌停幅度）→ 30% 概率成交，其余保留 PENDING
+        // 拒单不改 status（仍 PENDING），下个 tick 重试，资金保持冻结，符合真实排队语义。
+        if (!canFillUnderLimit(isBuy, row, o.getStockCode())) {
+            log.info("[match] order {} skipped by limit-board rule: {} {} {} change_pct={} ask_vol1={} bid_vol1={} (still PENDING, will retry)",
+                    o.getId(), o.getSide(), o.getStockCode(),
+                    row.name == null ? "" : row.name,
+                    row.changePct, row.askVol1, row.bidVol1);
+            return;
+        }
 
         BigDecimal filledPrice = latest;
         BigDecimal qty = BigDecimal.valueOf(o.getAmount());
@@ -203,18 +224,75 @@ public class MatchEngine {
         }
     }
 
-    private Map<String, BigDecimal> extractPrices(SnapshotResponse snap) {
-        Map<String, BigDecimal> out = new HashMap<>();
+    private Map<String, MarketRow> extractMarketData(SnapshotResponse snap) {
+        Map<String, MarketRow> out = new HashMap<>();
         if (snap == null || snap.getData() == null) return out;
         for (Map<String, Object> row : snap.getData()) {
             Object codeObj = row.get("code");
             Object priceObj = row.get("price");
             if (codeObj == null || priceObj == null) continue;
             try {
-                out.put(String.valueOf(codeObj), new BigDecimal(String.valueOf(priceObj)));
+                MarketRow m = new MarketRow();
+                m.price = new BigDecimal(String.valueOf(priceObj));
+                m.changePct = row.get("change_pct") == null
+                        ? BigDecimal.ZERO
+                        : new BigDecimal(String.valueOf(row.get("change_pct")));
+                m.name = row.get("name") == null ? "" : String.valueOf(row.get("name"));
+                m.askVol1 = parseLongLoose(row.get("ask_vol1"));
+                m.bidVol1 = parseLongLoose(row.get("bid_vol1"));
+                out.put(String.valueOf(codeObj), m);
             } catch (NumberFormatException ignored) {}
         }
         return out;
+    }
+
+    /** 按代码段 / ST 判断涨跌停幅度（百分点）。
+     *   - name 含 ST / *ST → 5
+     *   - code 300 / 688 开头（创业板 / 科创板）→ 20
+     *   - 其他主板 → 10
+     *  没覆盖：北交所 30%、新股前 5 天无限制 —— 简单版省略。 */
+    private static double limitPct(String code, String name) {
+        if (name != null && name.toUpperCase().contains("ST")) return 5.0;
+        if (code != null && code.length() >= 3) {
+            String p3 = code.substring(0, 3);
+            if ("300".equals(p3) || "688".equals(p3)) return 20.0;
+        }
+        return 10.0;
+    }
+
+    /** 决定本笔是否能在当前盘口成交。false=保留 PENDING 下 tick 重试。 */
+    private static boolean canFillUnderLimit(boolean isBuy, MarketRow m, String code) {
+        if (m.changePct == null) return true;
+        double cap = limitPct(code, m.name);
+        double pct = m.changePct.doubleValue();
+        // 触及涨停门槛（接近或达到）
+        if (isBuy && pct >= cap * 0.99) {
+            if (m.askVol1 <= 0) return false;          // 一字板：全拒
+            return ThreadLocalRandom.current().nextDouble() < 0.30;  // 否则 30% 概率成交
+        }
+        if (!isBuy && pct <= -cap * 0.99) {
+            if (m.bidVol1 <= 0) return false;
+            return ThreadLocalRandom.current().nextDouble() < 0.30;
+        }
+        return true;
+    }
+
+    private static long parseLongLoose(Object o) {
+        if (o == null) return 0;
+        String s = String.valueOf(o).trim();
+        if (s.isEmpty()) return 0;
+        int dot = s.indexOf('.');
+        if (dot >= 0) s = s.substring(0, dot);
+        try { return Long.parseLong(s); } catch (NumberFormatException e) { return 0; }
+    }
+
+    /** 撮合用的市场行情快照（比纯 price 多了涨跌幅 / 盘口 / 名称）。 */
+    static class MarketRow {
+        BigDecimal price;
+        BigDecimal changePct;
+        String name;
+        long askVol1;
+        long bidVol1;
     }
 
     private static BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
