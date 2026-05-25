@@ -42,6 +42,9 @@ public class UpdateTraderReq {
     @Size(max = 32000, message = "脚本源码不能超过 32000 字")
     private String scriptCode;
 
+    @Size(max = 4000, message = "CTA 配置不能超过 4000 字")
+    private String ctaConfigJson;
+
     /** 选股池名；显式传空字符串视为清空回到默认 watchlist。 */
     @Size(max = 32, message = "poolName 长度不能超过 32")
     private String poolName;

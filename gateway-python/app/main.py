@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from app.api import account, pool, quote, trade, watchlist
+from app.api import account, news, pool, quote, trade, watchlist
 from app.config import settings
 from app.core.dynamic_pool import build_all_auto_refresh_pools, ensure_pool_fresh_on_startup
 from app.core.market_clock import market_status
@@ -66,6 +66,7 @@ app.include_router(trade.router)
 app.include_router(account.router)
 app.include_router(watchlist.router)
 app.include_router(pool.router)
+app.include_router(news.router)
 
 
 @app.get("/")

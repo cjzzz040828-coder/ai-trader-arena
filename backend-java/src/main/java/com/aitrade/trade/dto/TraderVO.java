@@ -29,6 +29,7 @@ public class TraderVO {
 
     private String indicatorConfigJson;
     private String scriptCode;
+    private String ctaConfigJson;
 
     /** 选股池名；null 表示走默认 watchlist。 */
     private String poolName;

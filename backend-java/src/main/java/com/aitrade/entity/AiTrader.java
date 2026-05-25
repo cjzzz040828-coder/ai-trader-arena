@@ -44,6 +44,18 @@ public class AiTrader {
     @TableField(updateStrategy = FieldStrategy.IGNORED)
     private String indicatorConfigJson;
 
+    /** CTA 策略配置 JSON。schema: ai_trader.cta_config_json TEXT。
+     *  结构：entry(DUAL_MA/BREAKOUT 信号) + stopLoss(固定% + 跟踪%) + exitOnReverseSignal。
+     *  updateStrategy=IGNORED：同上，允许切策略时清空。 */
+    @TableField(updateStrategy = FieldStrategy.IGNORED)
+    private String ctaConfigJson;
+
+    /** 多因子策略配置 JSON。schema: ai_trader.factor_config_json TEXT。
+     *  结构：factors[] (MOMENTUM/VOLATILITY/PE_TTM/PB/ROE + weight) + topN + rebalanceFreq。
+     *  updateStrategy=IGNORED：同上。 */
+    @TableField(updateStrategy = FieldStrategy.IGNORED)
+    private String factorConfigJson;
+
     /** SCRIPT 策略的 JS 源码。schema: ai_trader.script_code TEXT。
      *  updateStrategy=IGNORED：同上。 */
     @TableField(updateStrategy = FieldStrategy.IGNORED)

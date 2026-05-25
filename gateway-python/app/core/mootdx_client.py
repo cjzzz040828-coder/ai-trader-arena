@@ -75,6 +75,7 @@ class MootdxClient:
         self._client_lock = threading.RLock()
         self._cache: TTLCache = TTLCache(maxsize=2048, ttl=settings.quote_cache_ttl_seconds)
         self._bars_cache: TTLCache = TTLCache(maxsize=512, ttl=2)
+        self._tick_cache: TTLCache = TTLCache(maxsize=512, ttl=2)
         self._snapshot_fallback: dict[str, dict] = {}
         self._last_ok_ts: float = 0.0
         self._ready = threading.Event()
@@ -253,6 +254,45 @@ class MootdxClient:
             if "datetime" in r:
                 r["datetime"] = str(r["datetime"])
         self._bars_cache[cache_key] = records
+        return records
+
+    def transaction(self, code: str, count: int = 60) -> list[dict]:
+        """
+        当日逐笔成交（tdx 协议是按分钟+价格档位聚合的"分笔"，time 精度到分钟，
+        同一分钟内不同价位的成交会拆成多条，每条带方向 buyorsell）。
+
+        返回字段：time(HH:MM) / price / vol(手) / amount(元) / num(笔) / buyorsell(0买1卖2中性)
+        """
+        if not self._ready.is_set():
+            return []
+
+        count = max(1, min(count, 800))
+        cache_key = ("tx", code, count)
+        cached = self._tick_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            with self._client_lock:
+                df = self._client.transaction(symbol=code, start=0, offset=count)
+        except Exception as e:
+            logger.error(f"[mootdx] transaction error code={code} err={e}")
+            return []
+
+        if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+            return []
+
+        records = df.fillna(0).to_dict(orient="records")
+        for r in records:
+            price = float(r.get("price") or 0)
+            vol = int(r.get("vol") or 0)
+            # A股 1 手 = 100 股，金额 = 价 × 手 × 100
+            r["amount"] = round(price * vol * 100, 2)
+            r["vol"] = vol
+            r["price"] = price
+            r["num"] = int(r.get("num") or 0)
+            r["buyorsell"] = int(r.get("buyorsell") or 2)
+        self._tick_cache[cache_key] = records
         return records
 
     @staticmethod

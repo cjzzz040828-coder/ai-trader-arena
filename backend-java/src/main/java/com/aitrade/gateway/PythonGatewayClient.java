@@ -34,6 +34,10 @@ public class PythonGatewayClient {
         return getNoRetry("/quote/bars?code=" + code + "&frequency=" + frequency + "&count=" + count, Map.class);
     }
 
+    public Map<String, Object> transaction(String code, int count) {
+        return getNoRetry("/quote/transaction?code=" + code + "&count=" + count, Map.class);
+    }
+
     public Map<String, Object> watchlist() {
         return get("/watchlist", Map.class);
     }
@@ -104,6 +108,22 @@ public class PythonGatewayClient {
 
     public Map<String, Object> balance() {
         return get("/account/balance", Map.class);
+    }
+
+    public Map<String, Object> stockNews(String code, int limit) {
+        return getNoRetry("/news/stock/" + code + "?limit=" + limit, Map.class);
+    }
+
+    public Map<String, Object> clsTelegraph(String symbol, int limit) {
+        String s = (symbol == null || symbol.isBlank()) ? "全部" : symbol;
+        return getNoRetry("/news/cls?symbol=" + java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8)
+                + "&limit=" + limit, Map.class);
+    }
+
+    public Map<String, Object> stockSearch(String q, int limit) {
+        return getNoRetry("/quote/search?q="
+                + java.net.URLEncoder.encode(q == null ? "" : q, java.nio.charset.StandardCharsets.UTF_8)
+                + "&limit=" + limit, Map.class);
     }
 
     /** 简单的一次重试封装 */

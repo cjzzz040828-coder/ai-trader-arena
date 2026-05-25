@@ -141,7 +141,7 @@ function startPolling() {
   if (timer != null) return
   timer = window.setInterval(() => {
     store.fetchTraders().catch(() => {})
-    store.fetchPositions().catch(() => {})
+    store.fetchPositions().then(() => store.refreshQuotes()).catch(() => {})
   }, 5000)
 }
 
@@ -242,6 +242,15 @@ onUnmounted(() => {
           </el-table-column>
           <el-table-column label="现价" width="100">
             <template #default="{ row }">{{ fmt(row.currentPrice, 3) }}</template>
+          </el-table-column>
+          <el-table-column label="今日涨跌" width="100">
+            <template #default="{ row }">
+              <span v-if="typeof store.changePctOf(row.stockCode) === 'number'"
+                    :class="store.changePctOf(row.stockCode)! >= 0 ? 'up' : 'down'">
+                {{ store.changePctOf(row.stockCode)! >= 0 ? '+' : '' }}{{ fmt(store.changePctOf(row.stockCode)!) }}%
+              </span>
+              <span v-else style="color: var(--brand-text-placeholder);">-</span>
+            </template>
           </el-table-column>
           <el-table-column label="市值" width="120">
             <template #default="{ row }">¥{{ fmt(row.marketValue) }}</template>

@@ -141,6 +141,7 @@ public class MatchEngine {
                 pos.setFrozenAmount(0);
                 pos.setCostPrice(filledPrice);
                 pos.setCurrentPrice(filledPrice);
+                pos.setHighSinceEntry(filledPrice);  // 新仓：起点即成交价
                 pos.setUpdatedAt(now);
                 positionMapper.insert(pos);
             } else {
@@ -151,6 +152,11 @@ public class MatchEngine {
                 pos.setAmount(newAmt);
                 pos.setCostPrice(avg);
                 pos.setCurrentPrice(filledPrice);
+                // 加仓：高水位 = max(原值, 当前成交价)。原值若为空就用成交价兜底。
+                BigDecimal prevHigh = pos.getHighSinceEntry();
+                if (prevHigh == null || filledPrice.compareTo(prevHigh) > 0) {
+                    pos.setHighSinceEntry(filledPrice);
+                }
                 pos.setUpdatedAt(now);
                 positionMapper.updateById(pos);
             }
@@ -185,12 +191,17 @@ public class MatchEngine {
         LocalDateTime now = LocalDateTime.now();
 
         // 1. 更新所有有持仓的 position.current_price（用新行情）
+        //    同时 bump high_since_entry：current_price > 原 high 则刷新（CTA 跟踪止损用）
         List<Position> positions = positionMapper.selectList(
                 new QueryWrapper<Position>().gt("amount", 0));
         for (Position p : positions) {
             BigDecimal latest = priceMap.get(p.getStockCode());
             if (latest == null || latest.signum() <= 0) continue;
             p.setCurrentPrice(latest);
+            BigDecimal prevHigh = p.getHighSinceEntry();
+            if (prevHigh == null || latest.compareTo(prevHigh) > 0) {
+                p.setHighSinceEntry(latest);
+            }
             p.setUpdatedAt(now);
             positionMapper.updateById(p);
         }

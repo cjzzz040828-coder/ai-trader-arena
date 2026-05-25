@@ -14,7 +14,7 @@ public class CreateTraderReq {
     @Size(max = 64, message = "name 长度 1-64")
     private String name;
 
-    /** MANUAL / MA / LLM。null 视为 MANUAL */
+    /** MANUAL / MA / LLM / INDICATOR / SCRIPT / CTA。null 视为 MANUAL */
     private String strategyType;
 
     private Boolean enabled;
@@ -43,6 +43,10 @@ public class CreateTraderReq {
     /** SCRIPT 策略的 JavaScript 源码。 */
     @Size(max = 32000, message = "脚本源码不能超过 32000 字")
     private String scriptCode;
+
+    /** CTA 策略的 JSON 配置（入场 DUAL_MA/BREAKOUT + 固定/跟踪止损 + 反向出场）。 */
+    @Size(max = 4000, message = "CTA 配置不能超过 4000 字")
+    private String ctaConfigJson;
 
     /** 选股池名，对应 gateway pool_registry 里的 slug；null 表示沿用默认 watchlist。 */
     @Size(max = 32, message = "poolName 长度不能超过 32")

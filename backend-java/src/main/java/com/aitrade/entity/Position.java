@@ -19,5 +19,8 @@ public class Position {
     private Integer frozenAmount;
     private BigDecimal costPrice;
     private BigDecimal currentPrice;
+    /** 持仓期间最高价。BUY 成交时 = filled_price；revalue 时取 max(原值, current_price)。
+     *  CTA 跟踪止损用：trigger = high_since_entry × (1 - trailingPct%) */
+    private BigDecimal highSinceEntry;
     private LocalDateTime updatedAt;
 }

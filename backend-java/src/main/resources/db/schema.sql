@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS ai_trader (
     llm_model       VARCHAR(64),
     llm_prompt      TEXT,
     indicator_config_json TEXT,
+    cta_config_json TEXT,
+    factor_config_json TEXT,
     script_code     TEXT,
     pool_name       VARCHAR(32),
     template_id     INTEGER,
@@ -55,14 +57,18 @@ CREATE INDEX IF NOT EXISTS idx_tpl_official ON strategy_template(is_official, so
 
 -- 持仓
 CREATE TABLE IF NOT EXISTS position (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    trader_id      INTEGER NOT NULL,
-    stock_code     VARCHAR(16) NOT NULL,
-    amount         INTEGER NOT NULL,
-    frozen_amount  INTEGER NOT NULL DEFAULT 0,
-    cost_price     DECIMAL(10,3) NOT NULL,
-    current_price  DECIMAL(10,3),
-    updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    trader_id       INTEGER NOT NULL,
+    stock_code      VARCHAR(16) NOT NULL,
+    amount          INTEGER NOT NULL,
+    frozen_amount   INTEGER NOT NULL DEFAULT 0,
+    cost_price      DECIMAL(10,3) NOT NULL,
+    current_price   DECIMAL(10,3),
+    -- 持仓期间最高价。BUY 成交时 = filled_price；revalue 时 max(原值, current_price)。
+    -- CTA 跟踪止损用：trigger = high_since_entry × (1 - trailingPct%)
+    -- 清仓（amount=0 删行）后下次买入会重新插入新行，自然重置
+    high_since_entry DECIMAL(10,3),
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_pos_trader ON position(trader_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pos_trader_code ON position(trader_id, stock_code);

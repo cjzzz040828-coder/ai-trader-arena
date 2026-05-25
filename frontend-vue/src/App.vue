@@ -11,16 +11,11 @@ const route = useRoute()
 const theme = useTheme()
 
 const showHeader = computed(() => route.path !== '/login')
-const strategyActive = computed(() => route.path === '/strategies' || route.path === '/traders' || route.path === '/pools')
 
 async function onLogout() {
   await ElMessageBox.confirm('确定退出登录？', '提示', { type: 'warning' })
   auth.logout()
   router.replace('/login')
-}
-
-function goto(path: string) {
-  router.push(path)
 }
 </script>
 
@@ -35,16 +30,10 @@ function goto(path: string) {
         <RouterLink to="/" class="link" :class="{ active: route.path === '/' }">Dashboard</RouterLink>
         <RouterLink to="/my-trader" class="link" :class="{ active: route.path === '/my-trader' }">我的Trader</RouterLink>
         <RouterLink to="/llm-activity" class="link" :class="{ active: route.path === '/llm-activity' }">LLM监控</RouterLink>
-        <el-dropdown trigger="hover" @command="goto">
-          <span class="link" :class="{ active: strategyActive }">策略 <span class="caret">▾</span></span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="/strategies">策略库</el-dropdown-item>
-              <el-dropdown-item command="/traders">Trader 管理</el-dropdown-item>
-              <el-dropdown-item command="/pools">选股池</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <RouterLink to="/strategies" class="link" :class="{ active: route.path === '/strategies' }">策略库</RouterLink>
+        <RouterLink to="/traders" class="link" :class="{ active: route.path === '/traders' }">Trader管理</RouterLink>
+        <RouterLink to="/pools" class="link" :class="{ active: route.path === '/pools' }">选股池</RouterLink>
+        <RouterLink to="/news" class="link" :class="{ active: route.path === '/news' }">新闻</RouterLink>
         <RouterLink to="/leaderboard" class="link" :class="{ active: route.path === '/leaderboard' }">排行榜</RouterLink>
         <RouterLink to="/backtests" class="link" :class="{ active: route.path === '/backtests' }">回测历史</RouterLink>
       </nav>
@@ -105,7 +94,6 @@ function goto(path: string) {
 }
 .app-header .link:hover { background: var(--brand-header-hover); }
 .app-header .link.active { background: var(--brand-header-active); color: #fff; }
-.app-header .caret { font-size: 11px; opacity: 0.8; margin-left: 2px; }
 .theme-toggle {
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; margin-right: 8px;

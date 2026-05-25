@@ -117,6 +117,42 @@ public class LlmTools {
         return r;
     }
 
+    public Map<String, Object> getStockNews(AiTrader trader, MarketContext ctx, Map<String, Object> args) {
+        String code = strVal(args.get("code"));
+        if (code == null) return err("code 必填");
+        int limit = 5;
+        Object l = args.get("limit");
+        if (l instanceof Number) limit = Math.max(1, Math.min(10, ((Number) l).intValue()));
+        try {
+            Map<String, Object> resp = gateway.stockNews(code, limit);
+            Object itemsObj = resp == null ? null : resp.get("items");
+            List<Map<String, Object>> rows = new ArrayList<>();
+            if (itemsObj instanceof List<?> arr) {
+                for (Object o : arr) {
+                    if (!(o instanceof Map<?, ?> m)) continue;
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("time", m.get("time"));
+                    row.put("title", m.get("title"));
+                    String content = stringOf(m.get("content"));
+                    if (content.length() > 200) content = content.substring(0, 200) + "...";
+                    row.put("content", content);
+                    row.put("source", m.get("source"));
+                    rows.add(row);
+                }
+            }
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("ok", true);
+            r.put("code", code);
+            r.put("name", ctx.nameOf(code));
+            r.put("count", rows.size());
+            r.put("items", rows);
+            return r;
+        } catch (Exception e) {
+            log.warn("[strategy-llm-tool] getStockNews({}) failed: {}", code, e.getMessage());
+            return err("拉取新闻失败: " + e.getMessage());
+        }
+    }
+
     public Map<String, Object> getRecentTrades(AiTrader trader, MarketContext ctx, Map<String, Object> args) {
         int limit = 20;
         Object l = args.get("limit");
@@ -284,6 +320,68 @@ public class LlmTools {
         }
     }
 
+    // ---------------- prompt 注入用（新闻 / 情绪），非工具，直接拼字符串 ----------------
+
+    /**
+     * 取财联社电报 top N 条标题（仅标题，不带正文，省 token），供 prompt 注入大盘情绪用。
+     * 任何失败都返回空串，绝不让 LLM 决策因新闻拉取异常而中断。
+     */
+    public String formatMarketSentimentSection(int limit) {
+        try {
+            Map<String, Object> resp = gateway.clsTelegraph("全部", limit);
+            Object itemsObj = resp == null ? null : resp.get("items");
+            if (!(itemsObj instanceof List<?> arr) || arr.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder();
+            sb.append("\n# 大盘情绪（财联社电报 最新 ").append(arr.size()).append(" 条）\n");
+            int n = 0;
+            for (Object o : arr) {
+                if (!(o instanceof Map<?, ?> m)) continue;
+                String t = stringOf(m.get("title"));
+                String c = stringOf(m.get("content"));
+                String tm = stringOf(m.get("time"));
+                String headline = !t.isBlank() ? t : (c.length() > 80 ? c.substring(0, 80) + "..." : c);
+                if (headline.isBlank()) continue;
+                sb.append("- ").append(tm).append(" ").append(headline).append("\n");
+                if (++n >= limit) break;
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warn("[strategy-llm-prompt] CLS sentiment skipped: {}", e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * 给当前持仓拉新闻标题（每只 3 条），让 LLM 决策时知道"我手上的票今天有啥事"。
+     * 失败的单只票安静跳过，整体不抛。
+     */
+    public String formatPositionNewsSection(MarketContext ctx, List<Position> positions) {
+        if (positions == null || positions.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n# 持仓个股最新新闻（每只取 3 条标题）\n");
+        boolean any = false;
+        for (Position p : positions) {
+            String code = p.getStockCode();
+            try {
+                Map<String, Object> resp = gateway.stockNews(code, 3);
+                Object itemsObj = resp == null ? null : resp.get("items");
+                if (!(itemsObj instanceof List<?> arr) || arr.isEmpty()) continue;
+                sb.append("## ").append(code).append(" ").append(ctx.nameOf(code) == null ? "" : ctx.nameOf(code)).append("\n");
+                for (Object o : arr) {
+                    if (!(o instanceof Map<?, ?> m)) continue;
+                    String t = stringOf(m.get("title"));
+                    String tm = stringOf(m.get("time"));
+                    if (t.isBlank()) continue;
+                    sb.append("- ").append(tm).append(" ").append(t).append("\n");
+                }
+                any = true;
+            } catch (Exception e) {
+                log.debug("[strategy-llm-prompt] news for {} skipped: {}", code, e.getMessage());
+            }
+        }
+        return any ? sb.toString() : "";
+    }
+
     /**
      * 给 LLM prompt 使用的全盘技术快照（不是工具，不走 HTTP）。
      * 每只股票返回 6 个核心指标：现价 / 当日涨跌 / MA5 / MA10 / MA20 / 5 日累计涨跌 / 量比。
@@ -368,6 +466,10 @@ public class LlmTools {
         if (v == null) return null;
         String s = String.valueOf(v).trim();
         return s.isEmpty() ? null : s;
+    }
+
+    private static String stringOf(Object v) {
+        return v == null ? "" : String.valueOf(v);
     }
 
     private static Integer nzi(Integer v) { return v == null ? 0 : v; }

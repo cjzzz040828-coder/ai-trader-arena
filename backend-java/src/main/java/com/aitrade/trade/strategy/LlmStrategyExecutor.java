@@ -16,7 +16,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -63,8 +62,6 @@ public class LlmStrategyExecutor implements StrategyExecutor {
             .requestFactory(timeoutFactory())
             .defaultHeader("User-Agent", "aiTrade-LLM/1.0")
             .build();
-    private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
-            new ParameterizedTypeReference<>() {};
     private static final TypeReference<Map<String, Object>> MAP_TYPE_REF = new TypeReference<>() {};
 
     private final PositionMapper positionMapper;
@@ -211,7 +208,13 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                     return List.of();
                 }
 
-                messages.add(message);
+                // 只保留协议规定字段后再回传：Kimi K2 Thinking / GLM-4.5V / Qwen3-VL 等会附带
+                // reasoning_content 等扩展字段，原样回传会让 SiliconFlow 校验失败抛 20015。
+                Map<String, Object> assistantMsg = new LinkedHashMap<>();
+                assistantMsg.put("role", "assistant");
+                assistantMsg.put("content", message.get("content"));
+                assistantMsg.put("tool_calls", toolCalls);
+                messages.add(assistantMsg);
 
                 for (Map<String, Object> tc : toolCalls) {
                     totalToolCalls++;
@@ -319,6 +322,7 @@ public class LlmStrategyExecutor implements StrategyExecutor {
             case "get_stock_analysis" -> tools.getStockAnalysis(trader, ctx, args);
             case "get_minute_chart" -> tools.getMinuteChart(trader, ctx, args);
             case "get_recent_trades" -> tools.getRecentTrades(trader, ctx, args);
+            case "get_stock_news" -> tools.getStockNews(trader, ctx, args);
             case "place_order" -> tools.placeOrder(trader, ctx, args);
             case "get_pending_orders" -> tools.getPendingOrders(trader, ctx, args);
             case "cancel_order" -> tools.cancelOrder(trader, ctx, args);
@@ -349,7 +353,8 @@ public class LlmStrategyExecutor implements StrategyExecutor {
 
                 工作流程：
                 1. **基于全盘技术快照初筛**：用户消息里的 "Watchlist 全盘技术快照" 已经把所有标的的现价、当日涨跌、MA5/10/20、5 日涨跌、量比一次性给齐了——**这就是你的初筛工作台，请认真扫一遍全盘，再按投资策略圈出 3~5 只重点关注标的**。不要光看前几行就下结论。
-                2. 对圈出的 3~5 只调用 get_stock_analysis(code) 看最近 10 根 K 线 OHLC + 20 日涨跌，必要时 get_minute_chart(code) 看今日分时；get_recent_trades(limit) 看自己历史成交。
+                2. 对圈出的 3~5 只调用 get_stock_analysis(code) 看最近 10 根 K 线 OHLC + 20 日涨跌，必要时 get_minute_chart(code) 看今日分时；get_stock_news(code) 看个股最新新闻（业绩 / 评级 / 利好利空）；get_recent_trades(limit) 看自己历史成交。
+                   - **新闻已预置**：用户消息里已经带了"大盘情绪（财联社电报）"和"持仓个股最新新闻"两个 section，这两块**不要重复用 get_stock_news 拉**——预算紧张，只对**未持仓但准备建仓的候选股**调 get_stock_news。
                    - **扫描宽度建议**：本轮深查 3~5 只**不同**标的即可，避免每次只押同样几只老熟脸——全盘快照已经覆盖全部 watchlist，你能看到的远比"几只熟脸"多。
                    - **预算硬约束**：累计工具调用达到 6 次后必须开始下单，不允许继续查询——剩下的额度要留给 place_order / cancel_order，否则会撞最大轮次被强制中断。
                 3. 决策后通过 place_order(code, side, amount, price) 下单；可以连续下多笔。
@@ -472,6 +477,13 @@ public class LlmStrategyExecutor implements StrategyExecutor {
         if (memorySummary != null && !memorySummary.isEmpty()) {
             sb.append(memorySummary);
         }
+
+        // 新闻 / 情绪注入：失败安静返回空串，不影响决策主流程
+        String sentiment = tools.formatMarketSentimentSection(5);
+        if (!sentiment.isEmpty()) sb.append(sentiment);
+        String posNews = tools.formatPositionNewsSection(ctx, positions);
+        if (!posNews.isEmpty()) sb.append(posNews);
+
         return sb.toString();
     }
 
@@ -498,6 +510,16 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                                 "type", "object",
                                 "properties", Map.of("limit", Map.of("type", "integer", "minimum", 1, "maximum", 50)),
                                 "required", List.of()
+                        )),
+                fnTool("get_stock_news",
+                        "拉取某只股票最近的新闻（东方财富数据源，含业绩公告/机构评级/利好利空消息）。返回 N 条 {time, title, content(截断), source}。用于判断个股突发事件、基本面变化、市场关注度。",
+                        Map.of(
+                                "type", "object",
+                                "properties", Map.of(
+                                        "code", Map.of("type", "string", "description", "6 位股票代码"),
+                                        "limit", Map.of("type", "integer", "minimum", 1, "maximum", 10, "description", "默认 5 条")
+                                ),
+                                "required", List.of("code")
                         )),
                 fnTool("place_order",
                         "下买入或卖出订单。amount 必须是 100 的整数倍。**限价规则：BUY 挂价是上限（必须 ≥ 现价才成交），SELL 挂价是下限（必须 ≤ 现价才成交）；反向挂会卡 PENDING 不成交。想立即成交：不传 price 用现价（推荐）。** 下单成功返回 order_id，下个 10s tick 撮合；挂价反向偏离 >1% 时响应会带 warning 字段。",
@@ -563,12 +585,18 @@ public class LlmStrategyExecutor implements StrategyExecutor {
         );
         long t0 = System.currentTimeMillis();
         try {
-            Map<String, Object> resp = HTTP.post().uri(url)
+            // 某些 LLM 网关响应 Content-Type 是 application/octet-stream，
+            // RestClient 找不到 Map 的 converter 会抛 UnknownContentTypeException；
+            // 用 byte[] + Jackson 手动解析绕开 converter 校验（与 decide() 一致）。
+            byte[] raw = HTTP.post().uri(url)
                     .header("Authorization", "Bearer " + trader.getLlmApiKey())
                     .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
                     .body(body)
                     .retrieve()
-                    .body(MAP_TYPE);
+                    .body(byte[].class);
+            Map<String, Object> resp = raw == null ? null
+                    : MAPPER.readValue(new String(raw, StandardCharsets.UTF_8), MAP_TYPE_REF);
             long elapsed = System.currentTimeMillis() - t0;
             String content = extractContent(resp);
             if (content == null || content.isBlank()) {

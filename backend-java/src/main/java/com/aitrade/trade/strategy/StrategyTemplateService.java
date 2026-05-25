@@ -109,6 +109,14 @@ public class StrategyTemplateService {
             creq.setLlmModel(strParam(params, "llmModel"));
             creq.setLlmPrompt(strParam(params, "llmPrompt"));
             creq.setLlmApiKey(req.getLlmApiKey().trim());
+        } else if ("CTA".equals(t.getStrategyType())) {
+            // CTA 模板 default_params_json 直接就是完整的 CtaConfig（entry/stopLoss/exitOnReverseSignal），
+            // 实例化时原样回传给 TraderService.create 走 validateCtaConfig 链路。
+            try {
+                creq.setCtaConfigJson(MAPPER.writeValueAsString(params));
+            } catch (Exception e) {
+                throw ApiException.badRequest("CTA 模板参数序列化失败: " + e.getMessage());
+            }
         } else {
             throw ApiException.badRequest("不支持的模板策略类型: " + t.getStrategyType());
         }

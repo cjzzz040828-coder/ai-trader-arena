@@ -6,6 +6,7 @@ import com.aitrade.gateway.PythonGatewayClient;
 import com.aitrade.gateway.dto.SnapshotResponse;
 import com.aitrade.trade.strategy.MovingAverageExecutor;
 import com.aitrade.trade.strategy.Signal;
+import com.aitrade.trade.strategy.cta.CtaStrategyExecutor;
 import com.aitrade.trade.strategy.indicator.IndicatorStrategyExecutor;
 import com.aitrade.trade.strategy.script.ScriptStrategyExecutor;
 import lombok.RequiredArgsConstructor;
@@ -61,6 +62,7 @@ public class BacktestEngine {
     private final MovingAverageExecutor maExecutor;
     private final IndicatorStrategyExecutor indicatorExecutor;
     private final ScriptStrategyExecutor scriptExecutor;
+    private final CtaStrategyExecutor ctaExecutor;
 
     public BacktestResult run(AiTrader trader,
                               LocalDate startDate,
@@ -190,6 +192,9 @@ public class BacktestEngine {
             BigDecimal equity = sandbox.equity(closeByCode);
             equityCurve.add(new EquityPoint(today.toString(), equity));
 
+            // C2. 把 today high 喂给 sandbox，刷新所有持仓的 high_since_entry（CTA 跟踪止损用）
+            sandbox.markHighWithDayHigh(collectHighsAt(today, fullBars, codes));
+
             // D. 切到下一交易日：撮合 pending
             if (i + 1 < tradingDays.size()) {
                 LocalDate nextDay = tradingDays.get(i + 1);
@@ -226,6 +231,7 @@ public class BacktestEngine {
             case "MA" -> maExecutor.decideWith(trader, ctx, positions);
             case "INDICATOR" -> indicatorExecutor.decideWith(trader, ctx, positions);
             case "SCRIPT" -> scriptExecutor.decideWith(trader, ctx, positions);
+            case "CTA" -> ctaExecutor.decideWith(trader, ctx, positions);
             default -> throw new IllegalStateException("回测不支持的策略类型: " + trader.getStrategyType());
         };
     }
@@ -259,6 +265,7 @@ public class BacktestEngine {
             p.setAmount(e.getValue().amount);
             p.setFrozenAmount(0);
             p.setCostPrice(e.getValue().costPrice);
+            p.setHighSinceEntry(e.getValue().highSinceEntry);
             out.put(e.getKey(), p);
         }
         return out;
@@ -293,6 +300,31 @@ public class BacktestEngine {
                 try {
                     BigDecimal price = new BigDecimal(String.valueOf(v));
                     if (price.signum() > 0) out.put(code, price);
+                } catch (NumberFormatException ignored) {}
+                break;
+            }
+        }
+        return out;
+    }
+
+    /** 取指定日期每只股票的 high（用于刷新跟踪止损的高水位）。 */
+    Map<String, BigDecimal> collectHighsAt(LocalDate date,
+                                            Map<String, List<Map<String, Object>>> fullBars,
+                                            List<String> codes) {
+        Map<String, BigDecimal> out = new HashMap<>();
+        String dStr = date.toString();
+        for (String code : codes) {
+            List<Map<String, Object>> all = fullBars.get(code);
+            if (all == null) continue;
+            for (Map<String, Object> bar : all) {
+                String dt = dateOf(bar);
+                if (!dStr.equals(dt)) continue;
+                Object v = bar.get("high");
+                if (v == null) v = bar.get("High");
+                if (v == null) break;
+                try {
+                    BigDecimal h = new BigDecimal(String.valueOf(v));
+                    if (h.signum() > 0) out.put(code, h);
                 } catch (NumberFormatException ignored) {}
                 break;
             }

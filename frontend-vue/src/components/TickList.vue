@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch, computed } from 'vue'
-import { api, type BarItem } from '@/api'
+import { api, type TickItem } from '@/api'
 
 const props = withDefaults(defineProps<{
   code: string
@@ -12,27 +12,17 @@ const props = withDefaults(defineProps<{
   intervalMs: 3000
 })
 
-const barsToday = ref<BarItem[]>([])
+const ticks = ref<TickItem[]>([])
 let timer: number | null = null
-
-function todayKey(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function filterToday(bars: BarItem[]): BarItem[] {
-  const key = todayKey()
-  return bars.filter(b => typeof b.datetime === 'string' && b.datetime.startsWith(key))
-}
 
 async function load() {
   if (!props.code) {
-    barsToday.value = []
+    ticks.value = []
     return
   }
   try {
-    const resp = await api.bars(props.code, 8, 300)
-    barsToday.value = filterToday(resp.data || [])
+    const resp = await api.transaction(props.code, 200)
+    ticks.value = resp.data || []
   } catch {
     // 静默失败：明细只是辅助，不影响主流程
   }
@@ -60,35 +50,32 @@ onMounted(() => {
 onBeforeUnmount(clearTimer)
 
 watch(() => props.code, () => {
-  barsToday.value = []
+  ticks.value = []
   load()
 })
 
-// 倒序（最新在上），compact 模式只取前 4 行
+// 倒序（最新在上）；compact 模式只取前 4 行
 const visibleRows = computed(() => {
-  const arr = [...barsToday.value].reverse()
+  const arr = [...ticks.value].reverse()
   return props.compact ? arr.slice(0, 4) : arr
 })
 
-function fmtTime(dt: string): string {
-  // datetime 形如 "YYYY-MM-DD HH:MM:SS"，截 HH:MM
-  return dt.length >= 16 ? dt.substring(11, 16) : dt
+// 价格颜色：与上一笔成交价比较，逐笔涨绿（红涨绿跌，A股标准）。这里简化：buyorsell 决定颜色
+// 0=主动买(B,外盘) → 上涨色；1=主动卖(S,内盘) → 下跌色；2=中性
+function priceColor(bs: number): string {
+  if (bs === 0) return 'var(--brand-up)'
+  if (bs === 1) return 'var(--brand-down)'
+  return 'var(--brand-text-primary)'
 }
 
-function pctOf(close: number): number {
-  if (!props.lastClose) return 0
-  return (close - props.lastClose) / props.lastClose * 100
-}
-
-function pctColor(pct: number): string {
-  if (pct > 0) return 'var(--brand-up)'
-  if (pct < 0) return 'var(--brand-down)'
-  return 'var(--brand-text-placeholder)'
-}
-
-function fmtPct(pct: number): string {
-  const s = pct.toFixed(2)
-  return pct > 0 ? `+${s}%` : `${s}%`
+// 金额单位：元 → 万 / 亿 自适应
+// < 1万 → 原值；< 100万 → X.X万；< 1亿 → XX万；>= 1亿 → X.XX亿
+function fmtAmount(amount: number): string {
+  if (!amount || !isFinite(amount)) return '--'
+  if (amount >= 1e8) return (amount / 1e8).toFixed(2) + '亿'
+  if (amount >= 1e6) return (amount / 1e4).toFixed(0) + '万'
+  if (amount >= 1e4) return (amount / 1e4).toFixed(1) + '万'
+  return amount.toFixed(0)
 }
 </script>
 
@@ -96,10 +83,10 @@ function fmtPct(pct: number): string {
   <div class="tick-list">
     <div v-if="visibleRows.length === 0" class="empty">暂无明细</div>
     <div v-else>
-      <div v-for="(b, i) in visibleRows" :key="b.datetime || i" class="tick-row">
-        <span class="time">{{ fmtTime(b.datetime) }}</span>
-        <span class="price" :style="{ color: pctColor(pctOf(b.close)) }">{{ b.close.toFixed(2) }}</span>
-        <span class="pct" :style="{ color: pctColor(pctOf(b.close)) }">{{ fmtPct(pctOf(b.close)) }}</span>
+      <div v-for="(t, i) in visibleRows" :key="(t.time || '') + i" class="tick-row">
+        <span class="time">{{ t.time }}</span>
+        <span class="price" :style="{ color: priceColor(t.buyorsell) }">{{ t.price.toFixed(2) }}</span>
+        <span class="amt" :style="{ color: priceColor(t.buyorsell) }">{{ fmtAmount(t.amount) }}</span>
       </div>
     </div>
   </div>
@@ -108,19 +95,30 @@ function fmtPct(pct: number): string {
 <style scoped>
 .tick-list {
   font-family: 'Consolas', monospace;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--brand-text-regular);
 }
 .tick-row {
   display: flex;
   align-items: center;
-  height: 24px;
+  height: 26px;
   padding: 0 10px;
-  border-bottom: 1px solid var(--brand-border-light);
 }
-.tick-row .time { flex: 0 0 60px; color: var(--brand-text-placeholder); }
-.tick-row .price { flex: 1; font-weight: 600; }
-.tick-row .pct { flex: 0 0 70px; text-align: right; }
+.tick-row .time {
+  flex: 0 0 52px;
+  color: var(--brand-text-secondary);
+  font-size: 12px;
+}
+.tick-row .price {
+  flex: 1;
+  font-weight: 700;
+  font-size: 14px;
+}
+.tick-row .amt {
+  flex: 0 0 70px;
+  text-align: right;
+  font-weight: 600;
+}
 .empty {
   padding: 16px 10px;
   text-align: center;

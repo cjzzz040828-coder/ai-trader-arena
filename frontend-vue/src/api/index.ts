@@ -72,6 +72,21 @@ export interface BarsResp {
   data: BarItem[]
 }
 
+export interface TickItem {
+  time: string         // "HH:MM"
+  price: number
+  vol: number          // 手
+  amount: number       // 元
+  num: number          // 笔
+  buyorsell: number    // 0=买 1=卖 2=中性
+}
+
+export interface TransactionResp {
+  code: string
+  count: number
+  data: TickItem[]
+}
+
 export interface WatchlistItem {
   code: string
   name: string
@@ -117,6 +132,7 @@ export interface TraderVO {
   llmApiKeySet: boolean
   indicatorConfigJson: string | null
   scriptCode: string | null
+  ctaConfigJson: string | null
   poolName: string | null
   templateId: number | null
 }
@@ -134,6 +150,7 @@ export interface CreateTraderReq {
   llmPrompt?: string
   indicatorConfigJson?: string
   scriptCode?: string
+  ctaConfigJson?: string
   poolName?: string
 }
 
@@ -150,6 +167,7 @@ export interface UpdateTraderReq {
   llmPrompt?: string
   indicatorConfigJson?: string
   scriptCode?: string
+  ctaConfigJson?: string
   poolName?: string
 }
 
@@ -173,6 +191,33 @@ export interface LeaderboardItem {
   totalProfit: number
   profitPct: number
   updatedAt: string
+}
+
+export interface NewsItem {
+  title: string
+  content: string
+  time: string
+  source: string
+  url: string
+}
+
+export interface NewsResponse {
+  code?: string
+  symbol?: string
+  count: number
+  items: NewsItem[]
+}
+
+export interface StockSearchItem {
+  code: string
+  name: string
+  market: string
+}
+
+export interface StockSearchResponse {
+  count: number
+  items: StockSearchItem[]
+  table_ready?: boolean
 }
 
 export interface TestLlmResult {
@@ -429,6 +474,8 @@ export const api = {
   quote: (codes: string) => http.get(`/quote/snapshot/${codes}`) as unknown as Promise<SnapshotResp>,
   bars: (code: string, frequency = 9, count = 240) =>
     http.get(`/quote/bars/${code}`, { params: { frequency, count } }) as unknown as Promise<BarsResp>,
+  transaction: (code: string, count = 60) =>
+    http.get(`/quote/transaction/${code}`, { params: { count } }) as unknown as Promise<TransactionResp>,
   watchlist: () => http.get('/quote/watchlist') as unknown as Promise<WatchlistResp>,
   watchlistReload: () => http.get('/quote/watchlist/reload') as unknown as Promise<WatchlistResp>,
   auth: {
@@ -465,6 +512,14 @@ export const api = {
   },
   leaderboard: (limit = 100) =>
     http.get('/leaderboard', { params: { limit } }) as unknown as Promise<LeaderboardItem[]>,
+  news: {
+    stock: (code: string, limit = 10) =>
+      http.get(`/news/stock/${code}`, { params: { limit } }) as unknown as Promise<NewsResponse>,
+    cls: (symbol: '全部' | '重点' = '全部', limit = 30) =>
+      http.get('/news/cls', { params: { symbol, limit } }) as unknown as Promise<NewsResponse>
+  },
+  stockSearch: (q: string, limit = 10) =>
+    http.get('/quote/search', { params: { q, limit } }) as unknown as Promise<StockSearchResponse>,
   backtest: {
     create: (req: BacktestRequest) =>
       http.post('/backtest/tasks', req) as unknown as Promise<BacktestTaskVO>,

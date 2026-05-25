@@ -9,6 +9,7 @@ import com.aitrade.trade.dto.CreateTraderReq;
 import com.aitrade.trade.dto.PositionVO;
 import com.aitrade.trade.dto.TraderVO;
 import com.aitrade.trade.dto.UpdateTraderReq;
+import com.aitrade.trade.strategy.cta.CtaStrategyExecutor;
 import com.aitrade.trade.strategy.indicator.IndicatorStrategyExecutor;
 import com.aitrade.trade.strategy.script.ScriptEngineFactory;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -30,7 +31,7 @@ import java.util.Set;
 public class TraderService {
 
     public static final BigDecimal DEFAULT_INITIAL_BALANCE = new BigDecimal("1000000");
-    public static final Set<String> STRATEGY_TYPES = Set.of("MANUAL", "MA", "LLM", "INDICATOR", "SCRIPT");
+    public static final Set<String> STRATEGY_TYPES = Set.of("MANUAL", "MA", "LLM", "INDICATOR", "SCRIPT", "CTA");
 
     private final AiTraderMapper aiTraderMapper;
     private final PositionMapper positionMapper;
@@ -90,6 +91,11 @@ public class TraderService {
             validateScriptCode(code);
             t.setScriptCode(code);
         }
+        if ("CTA".equals(type)) {
+            String cfg = blankToNull(req.getCtaConfigJson());
+            validateCtaConfig(cfg);
+            t.setCtaConfigJson(cfg);
+        }
         t.setPoolName(normalizePoolName(req.getPoolName()));
         LocalDateTime now = LocalDateTime.now();
         t.setCreatedAt(now);
@@ -125,11 +131,19 @@ public class TraderService {
             if (code != null) validateScriptCode(code);
             t.setScriptCode(code);
         }
+        if (req.getCtaConfigJson() != null) {
+            String cfg = blankToNull(req.getCtaConfigJson());
+            if (cfg != null) validateCtaConfig(cfg);
+            t.setCtaConfigJson(cfg);
+        }
         if ("INDICATOR".equals(t.getStrategyType())) {
             validateIndicatorConfig(t.getIndicatorConfigJson());
         }
         if ("SCRIPT".equals(t.getStrategyType())) {
             validateScriptCode(t.getScriptCode());
+        }
+        if ("CTA".equals(t.getStrategyType())) {
+            validateCtaConfig(t.getCtaConfigJson());
         }
 
         // poolName：null 不动；空串清空（回到默认 watchlist）；非空字符串归一化
@@ -245,6 +259,7 @@ public class TraderService {
         vo.setLlmApiKeySet(t.getLlmApiKey() != null && !t.getLlmApiKey().isEmpty());
         vo.setIndicatorConfigJson(t.getIndicatorConfigJson());
         vo.setScriptCode(t.getScriptCode());
+        vo.setCtaConfigJson(t.getCtaConfigJson());
         vo.setPoolName(t.getPoolName());
         vo.setTemplateId(t.getTemplateId());
         return vo;
@@ -313,6 +328,17 @@ public class TraderService {
         }
     }
 
+    private void validateCtaConfig(String json) {
+        if (json == null || json.isBlank()) {
+            throw ApiException.badRequest("CTA 策略需要填写入场+止损配置");
+        }
+        try {
+            CtaStrategyExecutor.parseAndValidate(json);
+        } catch (IllegalArgumentException e) {
+            throw ApiException.badRequest(e.getMessage());
+        }
+    }
+
     /** 校验脚本能编译，且暴露了 decide 函数。运行期超时由 ScriptEngineFactory 兜底，这里只验语法。 */
     private void validateScriptCode(String code) {
         if (code == null || code.isBlank()) {
@@ -344,12 +370,12 @@ public class TraderService {
         return lower;
     }
 
-    /** 用于策略调度循环：返回所有 enabled=1, deleted=0, strategy_type IN (MA, LLM, INDICATOR, SCRIPT) 的 trader。 */
+    /** 用于策略调度循环：返回所有 enabled=1, deleted=0, strategy_type IN (MA, LLM, INDICATOR, SCRIPT, CTA) 的 trader。 */
     public List<AiTrader> listForStrategy() {
         return aiTraderMapper.selectList(new QueryWrapper<AiTrader>()
                 .eq("enabled", 1)
                 .eq("deleted", 0)
-                .in("strategy_type", "MA", "LLM", "INDICATOR", "SCRIPT"));
+                .in("strategy_type", "MA", "LLM", "INDICATOR", "SCRIPT", "CTA"));
     }
 
     /** dashboard 用：返回当前用户所有 LLM trader（含 disabled，但排除软删）。 */

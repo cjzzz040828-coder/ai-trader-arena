@@ -87,16 +87,33 @@ public class StrategyOrchestrator {
 
         int amount;
         if ("BUY".equals(s.side())) {
-            BigDecimal budget = trader.getBalance() == null ? BigDecimal.ZERO : trader.getBalance();
-            BigDecimal target = budget.multiply(BUY_FRACTION);
-            BigDecimal sharesRaw = target.divide(price, 6, RoundingMode.DOWN);
-            int hundreds = sharesRaw.divide(BigDecimal.valueOf(100), 0, RoundingMode.DOWN).intValue();
-            if (hundreds <= 0) {
-                log.debug("[strategy] trader {} BUY {} budget {} price {} too small",
-                        trader.getId(), s.stockCode(), target, price);
-                return false;
+            if (s.targetAmount() != null) {
+                // 策略指定精确股数（如多因子等权再平衡）：必须 100 整数倍 + 资金校验
+                int target = s.targetAmount();
+                if (target < 100 || target % 100 != 0) {
+                    log.debug("[strategy] trader {} BUY {} targetAmount {} invalid, skip",
+                            trader.getId(), s.stockCode(), target);
+                    return false;
+                }
+                BigDecimal need = price.multiply(BigDecimal.valueOf(target));
+                if (trader.getBalance() == null || trader.getBalance().compareTo(need) < 0) {
+                    log.debug("[strategy] trader {} BUY {} need {} balance {} insufficient",
+                            trader.getId(), s.stockCode(), need, trader.getBalance());
+                    return false;
+                }
+                amount = target;
+            } else {
+                BigDecimal budget = trader.getBalance() == null ? BigDecimal.ZERO : trader.getBalance();
+                BigDecimal target = budget.multiply(BUY_FRACTION);
+                BigDecimal sharesRaw = target.divide(price, 6, RoundingMode.DOWN);
+                int hundreds = sharesRaw.divide(BigDecimal.valueOf(100), 0, RoundingMode.DOWN).intValue();
+                if (hundreds <= 0) {
+                    log.debug("[strategy] trader {} BUY {} budget {} price {} too small",
+                            trader.getId(), s.stockCode(), target, price);
+                    return false;
+                }
+                amount = hundreds * 100;
             }
-            amount = hundreds * 100;
         } else if ("SELL".equals(s.side())) {
             if (orderService.boughtToday(trader.getId(), s.stockCode())) {
                 log.debug("[strategy] trader {} SELL {} T+1 blocked", trader.getId(), s.stockCode());
@@ -107,7 +124,14 @@ public class StrategyOrchestrator {
             if (pos == null) return false;
             int sellable = pos.getAmount() - (pos.getFrozenAmount() == null ? 0 : pos.getFrozenAmount());
             if (sellable < 100) return false;
-            amount = (sellable / 100) * 100;
+            if (s.targetAmount() != null) {
+                int target = s.targetAmount();
+                if (target < 100 || target % 100 != 0) return false;
+                if (sellable < target) return false;
+                amount = target;
+            } else {
+                amount = (sellable / 100) * 100;
+            }
         } else {
             return false;
         }

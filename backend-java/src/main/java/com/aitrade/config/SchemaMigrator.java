@@ -39,6 +39,8 @@ public class SchemaMigrator {
         required.put("initial_balance", "DECIMAL(18,2) DEFAULT 1000000");
         required.put("template_id", "INTEGER");
         required.put("indicator_config_json", "TEXT");
+        required.put("cta_config_json", "TEXT");
+        required.put("factor_config_json", "TEXT");
         required.put("script_code", "TEXT");
         required.put("pool_name", "VARCHAR(32)");
 
@@ -96,6 +98,47 @@ public class SchemaMigrator {
         seedStrategyTemplates();
         migrateBacktestTask();
         migrateBacktestTrade();
+        migratePosition();
+    }
+
+    /** position 表加 high_since_entry 列：CTA 跟踪止损用持仓期间最高价。
+     *  老仓没有这个字段，回填为 max(current_price, cost_price) 让跟踪止损有起点。 */
+    private void migratePosition() {
+        Set<String> existing = new HashSet<>();
+        List<Map<String, Object>> rows;
+        try {
+            rows = jdbc.queryForList("PRAGMA table_info(position)");
+        } catch (Exception e) {
+            log.warn("[schema-migrator] PRAGMA position failed: {}", e.getMessage());
+            return;
+        }
+        for (Map<String, Object> row : rows) {
+            Object name = row.get("name");
+            if (name != null) existing.add(String.valueOf(name).toLowerCase());
+        }
+        if (existing.isEmpty()) {
+            log.warn("[schema-migrator] position not found, skip (schema.sql will create)");
+            return;
+        }
+        if (!existing.contains("high_since_entry")) {
+            try {
+                jdbc.execute("ALTER TABLE position ADD COLUMN high_since_entry DECIMAL(10,3)");
+                log.info("[schema-migrator] added column position.high_since_entry");
+            } catch (Exception e) {
+                log.error("[schema-migrator] failed to add column position.high_since_entry: {}", e.getMessage());
+                return;
+            }
+            try {
+                int n = jdbc.update(
+                        "UPDATE position SET high_since_entry = " +
+                        "CASE WHEN current_price IS NOT NULL AND current_price > cost_price " +
+                        "     THEN current_price ELSE cost_price END " +
+                        "WHERE high_since_entry IS NULL AND amount > 0");
+                if (n > 0) log.info("[schema-migrator] backfilled high_since_entry for {} legacy position(s)", n);
+            } catch (Exception e) {
+                log.warn("[schema-migrator] backfill high_since_entry: {}", e.getMessage());
+            }
+        }
     }
 
     /** 任务3 阶段二：backtest_task 加专业指标列（Sharpe/Sortino/Calmar/年化/胜率/盈亏比 + 基准 + 月度收益）。 */
@@ -199,7 +242,12 @@ public class SchemaMigrator {
     private void seedStrategyTemplates() {
         try {
             Integer cnt = jdbc.queryForObject("SELECT COUNT(*) FROM strategy_template", Integer.class);
-            if (cnt != null && cnt > 0) return;
+            if (cnt != null && cnt > 0) {
+                // 表已有数据：仍补插 CTA 两个模板（如果 code 已存在会被 INSERT OR IGNORE 安静跳过），
+                // 避免老库升级后用户在模板市场里看不到 CTA。
+                seedCtaTemplates();
+                return;
+            }
 
             String maClassic = "{\"maShort\":5,\"maLong\":20}";
             String maMid = "{\"maShort\":10,\"maLong\":60}";
@@ -227,8 +275,34 @@ public class SchemaMigrator {
                     "由 LLM 扮演趋势跟随者，仅在突破时买入，跌破短均线即清仓。使用前需自备 OpenAI 兼容 API Key。",
                     "LLM", llmTrend, "LLM,趋势", 40);
             log.info("[schema-migrator] seeded 4 official strategy templates");
+
+            seedCtaTemplates();
         } catch (Exception e) {
             log.warn("[schema-migrator] seed strategy_template failed: {}", e.getMessage());
+        }
+    }
+
+    /** CTA 模板单独抽出来：老库升级时也能补插（INSERT OR IGNORE 不会重复）。 */
+    private void seedCtaTemplates() {
+        try {
+            String ctaDualMa = "{\"entry\":{\"type\":\"DUAL_MA\",\"shortPeriod\":5,\"longPeriod\":20},"
+                    + "\"stopLoss\":{\"fixedPct\":8.0,\"trailingPct\":5.0},"
+                    + "\"exitOnReverseSignal\":true}";
+            String ctaBreakout = "{\"entry\":{\"type\":\"BREAKOUT\",\"lookback\":20},"
+                    + "\"stopLoss\":{\"trailingPct\":5.0},"
+                    + "\"exitOnReverseSignal\":false}";
+
+            int a = jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "cta-dual-ma-5-20", "CTA 双均线趋势",
+                    "5/20 双均线金叉买入、死叉卖出；同时配 8% 固定止损 + 5% 跟踪止损。比单纯 MA 更稳健——亏到 8% 强制止损，盈利后回撤 5% 止盈出场。",
+                    "CTA", ctaDualMa, "趋势,CTA,止损", 50);
+            int b = jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "cta-breakout-20d", "CTA 20 日突破跟踪",
+                    "唐奇安通道思想：今日收盘价突破过去 20 日最高价时买入，5% 跟踪止损让利润奔跑。突破策略经典玩法，适合追趋势。",
+                    "CTA", ctaBreakout, "突破,CTA,跟踪止损", 60);
+            if (a + b > 0) log.info("[schema-migrator] seeded {} CTA template(s)", a + b);
+        } catch (Exception e) {
+            log.warn("[schema-migrator] seed CTA templates failed: {}", e.getMessage());
         }
     }
 

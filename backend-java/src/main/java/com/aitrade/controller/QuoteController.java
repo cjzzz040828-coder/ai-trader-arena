@@ -38,6 +38,13 @@ public class QuoteController {
         return gateway.bars(code, frequency, count);
     }
 
+    @GetMapping("/transaction/{code}")
+    public Map<String, Object> transaction(
+            @PathVariable String code,
+            @RequestParam(defaultValue = "60") int count) {
+        return gateway.transaction(code, count);
+    }
+
     @GetMapping("/watchlist")
     public Map<String, Object> watchlist() {
         return gateway.watchlist();
@@ -46,5 +53,12 @@ public class QuoteController {
     @GetMapping("/watchlist/reload")
     public Map<String, Object> watchlistReload() {
         return gateway.watchlistReload();
+    }
+
+    @GetMapping("/search")
+    public Map<String, Object> search(
+            @RequestParam String q,
+            @RequestParam(defaultValue = "10") int limit) {
+        return gateway.stockSearch(q, limit);
     }
 }

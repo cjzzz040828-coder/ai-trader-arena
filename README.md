@@ -94,7 +94,7 @@ cpolar http 8000
 ### 阶段二·虚拟交易 + AI 策略
 - [x] 用户注册/登录（JWT + IP 维度限流）
 - [x] 虚拟账户 + Java 端撮合（`OrderService` + `MatchEngine`，10s tick，按 traderId 取细粒度锁）
-- [x] AI 交易员模型 — 多策略：MA 双均线 / LLM OpenAI 兼容 / INDICATOR 指标规则 / SCRIPT JS 脚本
+- [x] AI 交易员模型 — 多策略：MA 双均线 / LLM OpenAI 兼容 / INDICATOR 指标规则 / SCRIPT JS 脚本 / CTA 趋势
 - [x] 全站排行榜（按 total_profit 排序，5s 刷新，本人 trader 高亮）
 - [x] 下单流水可视化、持仓刷新
 - [x] 完整 K 线 + 分时图 + 五档盘口组件 + 逐笔成交
@@ -111,3 +111,5 @@ cpolar http 8000
 - [x] 策略调度优化（PREMARKET 集合竞价预热 + 开盘瞬间边沿补 tick + 间隔可配）
 - [x] 日/夜双主题（默认白天，右上角切夜间，A 股红涨绿跌独立于 Element Plus 语义色）
 - [ ] LLM × MA 信号融合（把回测验证过的 MA 参数注入 LLM trader prompt 作"专家信号"参考）
+- [x] CTA 趋势策略（DUAL_MA / BREAKOUT 入场 + 固定/跟踪止损 + 反向出场；持仓最高价落库 `position.high_since_entry`，实盘+回测同步维护；官方模板 2 个）
+- [ ] 因子库（gateway 端动量/波动率/成交量因子计算 + Java `FactorService` 只读 API，喂 LLM prompt / CTA 融合）

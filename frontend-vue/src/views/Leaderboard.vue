@@ -13,14 +13,15 @@ let timer: number | null = null
 
 const myUserId = computed(() => auth.user?.id ?? null)
 
-async function refresh() {
-  loading.value = true
+async function refresh(silent = false) {
+  if (!silent) loading.value = true
   try {
-    items.value = await api.leaderboard(100)
+    const next = await api.leaderboard(100)
+    items.value = next
   } catch (e: any) {
-    ElMessage.error('排行榜加载失败: ' + (e?.message || e))
+    if (!silent) ElMessage.error('排行榜加载失败: ' + (e?.message || e))
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
@@ -46,7 +47,7 @@ function strategyTag(t: string) {
 
 onMounted(() => {
   refresh()
-  timer = window.setInterval(refresh, 5000)
+  timer = window.setInterval(() => refresh(true), 5000)
 })
 
 onUnmounted(() => {
@@ -62,7 +63,7 @@ onUnmounted(() => {
       <span class="spacer"></span>
       <el-button size="small" :loading="loading" @click="refresh">刷新</el-button>
     </div>
-    <el-table :data="items" :row-class-name="rowClass" v-loading="loading" empty-text="暂无 trader" stripe>
+    <el-table :data="items" :row-class-name="rowClass" v-loading="loading" row-key="traderId" empty-text="暂无 trader" stripe>
       <el-table-column label="#" width="60">
         <template #default="{ row }">
           <span :class="row.rank <= 3 ? 'rank-top' : ''">{{ row.rank }}</span>

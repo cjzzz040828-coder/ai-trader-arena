@@ -78,13 +78,16 @@ public class BacktestSandbox {
             balance = balance.subtract(cost);
             Pos pos = positions.get(code);
             if (pos == null) {
-                positions.put(code, new Pos(amount, price));
+                positions.put(code, new Pos(amount, price, price));
             } else {
                 BigDecimal oldVal = pos.costPrice.multiply(BigDecimal.valueOf(pos.amount));
                 BigDecimal newVal = price.multiply(BigDecimal.valueOf(amount));
                 int newAmt = pos.amount + amount;
                 pos.costPrice = oldVal.add(newVal).divide(BigDecimal.valueOf(newAmt), 3, RoundingMode.HALF_UP);
                 pos.amount = newAmt;
+                if (pos.highSinceEntry == null || price.compareTo(pos.highSinceEntry) > 0) {
+                    pos.highSinceEntry = price;
+                }
             }
             todayBuys.add(code);
             return new Fill(code, "BUY", amount, price, balance, null);
@@ -135,13 +138,16 @@ public class BacktestSandbox {
                 }
                 Pos pos = positions.get(p.code);
                 if (pos == null) {
-                    positions.put(p.code, new Pos(p.amount, open));
+                    positions.put(p.code, new Pos(p.amount, open, open));
                 } else {
                     BigDecimal oldVal = pos.costPrice.multiply(BigDecimal.valueOf(pos.amount));
                     BigDecimal newVal = open.multiply(BigDecimal.valueOf(p.amount));
                     int newAmt = pos.amount + p.amount;
                     pos.costPrice = oldVal.add(newVal).divide(BigDecimal.valueOf(newAmt), 3, RoundingMode.HALF_UP);
                     pos.amount = newAmt;
+                    if (pos.highSinceEntry == null || open.compareTo(pos.highSinceEntry) > 0) {
+                        pos.highSinceEntry = open;
+                    }
                 }
                 todayBuys.add(p.code);
                 fills.add(new Fill(p.code, "BUY", p.amount, open, balance, null));
@@ -164,6 +170,19 @@ public class BacktestSandbox {
     /** 进入新交易日；清当日 T+1 标志（在 settleAtOpen 之后调）。 */
     public void clearTodayBuys() { todayBuys.clear(); }
 
+    /** 用今日 high 更新所有持仓的 high_since_entry（CTA 跟踪止损需要）。BacktestEngine 每个交易日调一次。
+     *  null/0 的 high 跳过。新建仓尚未填 high 的也兜底成 today high。 */
+    public void markHighWithDayHigh(Map<String, BigDecimal> highByCode) {
+        for (Map.Entry<String, Pos> e : positions.entrySet()) {
+            BigDecimal h = highByCode.get(e.getKey());
+            if (h == null || h.signum() <= 0) continue;
+            Pos pos = e.getValue();
+            if (pos.highSinceEntry == null || h.compareTo(pos.highSinceEntry) > 0) {
+                pos.highSinceEntry = h;
+            }
+        }
+    }
+
     /** 用收盘价估总资产。停牌（无价）的股票用成本价估。 */
     public BigDecimal equity(Map<String, BigDecimal> closeByCode) {
         BigDecimal posVal = BigDecimal.ZERO;
@@ -178,8 +197,10 @@ public class BacktestSandbox {
     public static class Pos {
         public int amount;
         public BigDecimal costPrice;
-        public Pos(int amount, BigDecimal costPrice) {
-            this.amount = amount; this.costPrice = costPrice;
+        /** 持仓期间最高价。BUY 时 = 成交价，每日 markHighWithDayHigh 时取 max。 */
+        public BigDecimal highSinceEntry;
+        public Pos(int amount, BigDecimal costPrice, BigDecimal highSinceEntry) {
+            this.amount = amount; this.costPrice = costPrice; this.highSinceEntry = highSinceEntry;
         }
     }
 

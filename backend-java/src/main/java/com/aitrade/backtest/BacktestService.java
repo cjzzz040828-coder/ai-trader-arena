@@ -70,8 +70,9 @@ public class BacktestService {
         if (!trader.getUserId().equals(userId)) throw ApiException.unauthorized("非本人 trader");
         String strategyType = trader.getStrategyType() == null ? "" : trader.getStrategyType().toUpperCase();
         if (!"MA".equals(strategyType) && !"INDICATOR".equals(strategyType)
-                && !"SCRIPT".equals(strategyType) && !"LLM".equals(strategyType)) {
-            throw ApiException.badRequest("当前只支持 MA / INDICATOR / SCRIPT / LLM 策略回测，trader 策略类型: " + trader.getStrategyType());
+                && !"SCRIPT".equals(strategyType) && !"LLM".equals(strategyType)
+                && !"CTA".equals(strategyType)) {
+            throw ApiException.badRequest("当前只支持 MA / INDICATOR / SCRIPT / LLM / CTA 策略回测，trader 策略类型: " + trader.getStrategyType());
         }
 
         LocalDate start = parseDate(req.getStartDate(), "startDate");

@@ -7,6 +7,7 @@ interface State {
   positions: PositionVO[]
   orders: OrderVO[]
   stockNames: Record<string, string>
+  stockChangePct: Record<string, number>
 }
 
 export const useTradeStore = defineStore('trade', {
@@ -15,12 +16,14 @@ export const useTradeStore = defineStore('trade', {
     currentTraderId: null,
     positions: [],
     orders: [],
-    stockNames: {}
+    stockNames: {},
+    stockChangePct: {}
   }),
   getters: {
     currentTrader: (s): TraderVO | undefined =>
       s.traders.find(t => t.id === s.currentTraderId),
-    stockName: (s) => (code: string) => s.stockNames[code] || ''
+    stockName: (s) => (code: string) => s.stockNames[code] || '',
+    changePctOf: (s) => (code: string) => s.stockChangePct[code]
   },
   actions: {
     async fetchTraders() {
@@ -38,7 +41,7 @@ export const useTradeStore = defineStore('trade', {
       this.positions = []
       this.orders = []
       await Promise.all([this.fetchPositions(), this.fetchOrders()])
-      await this.ensureStockNames()
+      await this.refreshQuotes()
     },
     async fetchPositions() {
       if (this.currentTraderId == null) return
@@ -51,21 +54,26 @@ export const useTradeStore = defineStore('trade', {
     async refreshAll() {
       await this.fetchTraders()
       await Promise.all([this.fetchPositions(), this.fetchOrders()])
-      await this.ensureStockNames()
+      await this.refreshQuotes()
     },
-    async ensureStockNames() {
+    /**
+     * 拉持仓/订单涉及的所有股票快照，更新 stockNames + stockChangePct。
+     * 跟 fetchPositions 同步调用，保证表格里 "今日涨跌幅" 列跟 currentPrice 同样新鲜。
+     */
+    async refreshQuotes() {
       const codes = new Set<string>()
       for (const p of this.positions) codes.add(p.stockCode)
       for (const o of this.orders) codes.add(o.stockCode)
-      const missing = [...codes].filter(c => !this.stockNames[c])
-      if (missing.length === 0) return
+      if (codes.size === 0) return
       try {
-        const resp = await api.quote(missing.join(','))
+        const resp = await api.quote([...codes].join(','))
         for (const item of resp.data || []) {
-          if (item.code && item.name) this.stockNames[item.code] = item.name
+          if (!item.code) continue
+          if (item.name) this.stockNames[item.code] = item.name
+          if (typeof item.change_pct === 'number') this.stockChangePct[item.code] = item.change_pct
         }
       } catch (e) {
-        console.warn('[trade] fetch stock names failed', e)
+        console.warn('[trade] refreshQuotes failed', e)
       }
     },
     async placeOrder(req: PlaceOrderReq) {

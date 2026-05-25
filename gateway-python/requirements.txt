@@ -11,3 +11,4 @@ cachetools==5.5.0
 chinese-calendar==1.10.0
 loguru==0.7.2
 pandas==2.2.3
+akshare==1.18.63

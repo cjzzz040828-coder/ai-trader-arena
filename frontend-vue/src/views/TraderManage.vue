@@ -20,6 +20,16 @@ const dialogOpen = ref(false)
 const submitting = ref(false)
 const editId = ref<number | null>(null)
 const editingFlat = ref(true)  // 编辑时该 trader 是否处于"无持仓+无冻结"状态
+const DEFAULT_LLM_BASE_URL = 'https://api.siliconflow.cn/'
+const DEFAULT_CTA = {
+  entryType: 'DUAL_MA' as 'DUAL_MA' | 'BREAKOUT',
+  maShort: 5,
+  maLong: 20,
+  lookback: 20,
+  fixedPct: 8,
+  trailingPct: 5,
+  exitOnReverse: true
+}
 const form = reactive({
   name: '',
   strategyType: 'MANUAL',
@@ -27,12 +37,13 @@ const form = reactive({
   initialBalance: 1000000,
   maShort: 5,
   maLong: 20,
-  llmBaseUrl: '',
+  llmBaseUrl: DEFAULT_LLM_BASE_URL,
   llmApiKey: '',
   llmModel: '',
   llmPrompt: '',
   indicatorConfigJson: '',
   scriptCode: '',
+  cta: { ...DEFAULT_CTA },
   poolName: ''
 })
 
@@ -42,6 +53,7 @@ const showMA = computed(() => form.strategyType === 'MA')
 const showLLM = computed(() => form.strategyType === 'LLM')
 const showIndicator = computed(() => form.strategyType === 'INDICATOR')
 const showScript = computed(() => form.strategyType === 'SCRIPT')
+const showCTA = computed(() => form.strategyType === 'CTA')
 const initialBalanceDisabled = computed(() => isEdit.value && !editingFlat.value)
 
 async function refresh() {
@@ -84,12 +96,13 @@ function openCreate() {
   form.initialBalance = 1000000
   form.maShort = 5
   form.maLong = 20
-  form.llmBaseUrl = ''
+  form.llmBaseUrl = DEFAULT_LLM_BASE_URL
   form.llmApiKey = ''
   form.llmModel = ''
   form.llmPrompt = ''
   form.indicatorConfigJson = ''
   form.scriptCode = ''
+  form.cta = { ...DEFAULT_CTA }
   form.poolName = ''
   dialogOpen.value = true
 }
@@ -110,8 +123,49 @@ function openEdit(t: TraderVO) {
   form.llmPrompt = t.llmPrompt ?? ''
   form.indicatorConfigJson = t.indicatorConfigJson ?? ''
   form.scriptCode = t.scriptCode ?? ''
+  form.cta = parseCtaConfigForForm(t.ctaConfigJson)
   form.poolName = t.poolName ?? ''
   dialogOpen.value = true
+}
+
+/** 把后端 ctaConfigJson 解析成 form.cta 结构；解析失败回退到默认。 */
+function parseCtaConfigForForm(json: string | null | undefined): typeof DEFAULT_CTA {
+  if (!json) return { ...DEFAULT_CTA }
+  try {
+    const cfg = JSON.parse(json)
+    const entryType = cfg.entry?.type === 'BREAKOUT' ? 'BREAKOUT' : 'DUAL_MA'
+    return {
+      entryType,
+      maShort: cfg.entry?.shortPeriod ?? 5,
+      maLong: cfg.entry?.longPeriod ?? 20,
+      lookback: cfg.entry?.lookback ?? 20,
+      fixedPct: cfg.stopLoss?.fixedPct ?? 0,
+      trailingPct: cfg.stopLoss?.trailingPct ?? 0,
+      exitOnReverse: cfg.exitOnReverseSignal !== false
+    }
+  } catch {
+    return { ...DEFAULT_CTA }
+  }
+}
+
+/** 把 form.cta 序列化成后端期望的 ctaConfigJson。fixedPct/trailingPct 为 0 视为禁用，序列化时省略字段。 */
+function buildCtaConfigJson(): string {
+  const cta = form.cta
+  const entry: Record<string, unknown> = { type: cta.entryType }
+  if (cta.entryType === 'DUAL_MA') {
+    entry.shortPeriod = cta.maShort
+    entry.longPeriod = cta.maLong
+  } else {
+    entry.lookback = cta.lookback
+  }
+  const stopLoss: Record<string, unknown> = {}
+  if (cta.fixedPct && cta.fixedPct > 0) stopLoss.fixedPct = cta.fixedPct
+  if (cta.trailingPct && cta.trailingPct > 0) stopLoss.trailingPct = cta.trailingPct
+  return JSON.stringify({
+    entry,
+    stopLoss,
+    exitOnReverseSignal: !!cta.exitOnReverse
+  })
 }
 
 async function submit() {
@@ -161,6 +215,34 @@ async function submit() {
       return
     }
   }
+  if (form.strategyType === 'CTA') {
+    if (form.cta.entryType === 'DUAL_MA') {
+      if (form.cta.maShort < 2 || form.cta.maShort > 60) {
+        ElMessage.warning('双均线短周期需在 2-60'); return
+      }
+      if (form.cta.maLong < 2 || form.cta.maLong > 250) {
+        ElMessage.warning('双均线长周期需在 2-250'); return
+      }
+      if (form.cta.maShort >= form.cta.maLong) {
+        ElMessage.warning('CTA 双均线：短周期必须小于长周期'); return
+      }
+    } else {
+      if (form.cta.lookback < 5 || form.cta.lookback > 120) {
+        ElMessage.warning('突破回看天数需在 5-120'); return
+      }
+    }
+    const hasFixed = form.cta.fixedPct > 0
+    const hasTrail = form.cta.trailingPct > 0
+    if (!hasFixed && !hasTrail) {
+      ElMessage.warning('CTA 必须配置固定止损或跟踪止损（防止裸跑）'); return
+    }
+    if (hasFixed && (form.cta.fixedPct <= 0 || form.cta.fixedPct > 50)) {
+      ElMessage.warning('固定止损 % 需在 (0, 50]'); return
+    }
+    if (hasTrail && (form.cta.trailingPct <= 0 || form.cta.trailingPct > 50)) {
+      ElMessage.warning('跟踪止损 % 需在 (0, 50]'); return
+    }
+  }
 
   submitting.value = true
   try {
@@ -171,12 +253,13 @@ async function submit() {
       initialBalance: form.initialBalance,
       maShort: form.maShort,
       maLong: form.maLong,
-      llmBaseUrl: form.llmBaseUrl.trim() || undefined,
+      llmBaseUrl: form.llmBaseUrl.trim() || DEFAULT_LLM_BASE_URL,
       llmApiKey: form.llmApiKey.trim() || undefined,
       llmModel: form.llmModel.trim() || undefined,
       llmPrompt: form.llmPrompt.trim() || undefined,
       indicatorConfigJson: form.indicatorConfigJson || undefined,
       scriptCode: form.scriptCode || undefined,
+      ctaConfigJson: form.strategyType === 'CTA' ? buildCtaConfigJson() : undefined,
       // 空串表示沿用默认 watchlist；显式选了池就传过去
       poolName: form.poolName ? form.poolName : (isEdit.value ? '' : undefined)
     }
@@ -428,6 +511,7 @@ function strategyTag(t: string) {
   if (t === 'LLM') return 'warning'
   if (t === 'INDICATOR') return 'primary'
   if (t === 'SCRIPT') return 'danger'
+  if (t === 'CTA') return 'success'
   return 'info'
 }
 
@@ -498,16 +582,17 @@ onMounted(() => {
           </span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="400" fixed="right" align="center">
+      <el-table-column label="操作" width="500" fixed="right" align="center" class-name="ops-cell">
         <template #default="{ row }">
-          <el-button v-if="row.strategyType === 'MA' || row.strategyType === 'LLM' || row.strategyType === 'INDICATOR' || row.strategyType === 'SCRIPT'"
+          <div class="ops-row">
+          <el-button v-if="['MA','LLM','INDICATOR','SCRIPT','CTA'].includes(row.strategyType)"
                      size="small" type="success" plain
                      :loading="decidingId === row.id"
                      @click="onDecideNow(row)">决策</el-button>
           <el-button v-if="row.strategyType === 'LLM'"
                      size="small" type="danger" plain
                      @click="onStopLlm(row)">停止</el-button>
-          <el-button v-if="row.strategyType === 'MA' || row.strategyType === 'INDICATOR' || row.strategyType === 'SCRIPT' || row.strategyType === 'LLM'"
+          <el-button v-if="['MA','INDICATOR','SCRIPT','LLM','CTA'].includes(row.strategyType)"
                      size="small" type="info" plain
                      @click="onBacktest(row)">回测</el-button>
           <el-button v-if="row.strategyType === 'LLM'"
@@ -517,6 +602,7 @@ onMounted(() => {
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" type="warning" @click="onReset(row)">重置</el-button>
           <el-button size="small" type="danger" @click="onDelete(row)">删除</el-button>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -530,6 +616,7 @@ onMounted(() => {
           <el-radio-group v-model="form.strategyType">
             <el-radio-button label="MANUAL">手动</el-radio-button>
             <el-radio-button label="MA">MA双均线</el-radio-button>
+            <el-radio-button label="CTA">CTA趋势</el-radio-button>
             <el-radio-button label="INDICATOR">指标组合</el-radio-button>
             <el-radio-button label="SCRIPT">脚本</el-radio-button>
             <el-radio-button label="LLM">LLM</el-radio-button>
@@ -571,6 +658,50 @@ onMounted(() => {
           </el-form-item>
         </template>
 
+        <template v-if="showCTA">
+          <el-divider content-position="left">CTA 入场 + 止损</el-divider>
+          <el-form-item label="入场方式">
+            <el-radio-group v-model="form.cta.entryType">
+              <el-radio-button label="DUAL_MA">双均线</el-radio-button>
+              <el-radio-button label="BREAKOUT">N 日突破</el-radio-button>
+            </el-radio-group>
+            <span class="form-hint">
+              <template v-if="form.cta.entryType === 'DUAL_MA'">金叉买入（持仓为空时），死叉作为反向出场</template>
+              <template v-else>价格突破过去 N 日最高价买入（唐奇安通道）</template>
+            </span>
+          </el-form-item>
+          <template v-if="form.cta.entryType === 'DUAL_MA'">
+            <el-form-item label="短周期">
+              <el-input-number v-model="form.cta.maShort" :min="2" :max="60" :step="1" />
+              <span class="form-hint">常用 5</span>
+            </el-form-item>
+            <el-form-item label="长周期">
+              <el-input-number v-model="form.cta.maLong" :min="3" :max="250" :step="1" />
+              <span class="form-hint">常用 20</span>
+            </el-form-item>
+          </template>
+          <template v-else>
+            <el-form-item label="回看天数">
+              <el-input-number v-model="form.cta.lookback" :min="5" :max="120" :step="1" />
+              <span class="form-hint">突破过去 N 日 high 时买入，跌破过去 N 日 low 时反向出场。常用 20</span>
+            </el-form-item>
+          </template>
+          <el-form-item label="固定止损">
+            <el-input-number v-model="form.cta.fixedPct" :min="0" :max="50" :step="0.5" :precision="1" />
+            <span class="form-hint">% — 价 ≤ cost × (1 - x%) 卖出。填 0 表示不启用</span>
+          </el-form-item>
+          <el-form-item label="跟踪止损">
+            <el-input-number v-model="form.cta.trailingPct" :min="0" :max="50" :step="0.5" :precision="1" />
+            <span class="form-hint">% — 价 ≤ 持仓期最高价 × (1 - x%) 卖出。填 0 表示不启用</span>
+          </el-form-item>
+          <el-form-item label="反向出场">
+            <el-switch v-model="form.cta.exitOnReverse" />
+            <span class="form-hint">
+              开启：反向信号也触发卖出（双均线死叉 / 跌破 N 日 low）。关闭：仅靠止损出场
+            </span>
+          </el-form-item>
+        </template>
+
         <template v-if="showIndicator">
           <el-divider content-position="left">指标组合配置</el-divider>
           <el-form-item label="规则" label-position="top" class="indicator-config-item">
@@ -588,7 +719,7 @@ onMounted(() => {
         <template v-if="showLLM">
           <el-divider content-position="left">LLM 配置（OpenAI 兼容）</el-divider>
           <el-form-item label="Base URL">
-            <el-input v-model="form.llmBaseUrl" placeholder="https://api.deepseek.com" />
+            <el-input v-model="form.llmBaseUrl" placeholder="https://api.siliconflow.cn/" />
           </el-form-item>
           <el-form-item label="API Key">
             <el-input v-model="form.llmApiKey" type="password" show-password
@@ -629,4 +760,9 @@ onMounted(() => {
 .name-text { font-weight: 600; color: var(--brand-text-primary); }
 .tpl-from { font-size: 11px; color: var(--brand-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .indicator-config-item :deep(.el-form-item__content) { width: 100%; margin-left: 0 !important; }
+.ops-row {
+  display: flex; flex-wrap: nowrap; justify-content: center;
+  align-items: center; gap: 6px;
+}
+.ops-row :deep(.el-button) { margin-left: 0 !important; flex: 0 0 auto; }
 </style>

@@ -10,6 +10,7 @@ import StrategyMarket from '@/views/StrategyMarket.vue'
 import BacktestReport from '@/views/BacktestReport.vue'
 import BacktestHistory from '@/views/BacktestHistory.vue'
 import PoolManage from '@/views/PoolManage.vue'
+import News from '@/views/News.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({
@@ -29,6 +30,7 @@ const router = createRouter({
     { path: '/strategies', name: 'strategies', component: StrategyMarket, meta: { requiresAuth: true } },
     { path: '/traders', name: 'traders', component: TraderManage, meta: { requiresAuth: true } },
     { path: '/pools', name: 'pools', component: PoolManage, meta: { requiresAuth: true } },
+    { path: '/news', name: 'news', component: News, meta: { requiresAuth: true } },
     { path: '/backtests', name: 'backtests', component: BacktestHistory, meta: { requiresAuth: true } },
     {
       path: '/backtest/:id(\\d+)',
