@@ -18,8 +18,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * 周期触发 + 开盘边沿补一次 tick。
  *
  * - 主调度：每 ${strategy.interval-ms:60000}ms 拉市场视图、串行喂所有 enabled+!deleted+strategy_type∈(MA,LLM,INDICATOR) 的 trader
- * - 边沿监听：每 5s 轻量 health 探一次 market_status；当从 ≠OPEN/PREMARKET 切到 OPEN 或 PREMARKET 瞬间立刻补一次 tick
- *   ↳ 解决"等到 9:30:xx 那一 tick 才决策"的延迟。也覆盖 13:00 下午开盘。
+ * - 边沿监听：每 5s 轻量 health 探一次 market_status；只要 status 变化且新状态 tradable（OPEN/PREMARKET）就补一次 tick
+ *   ↳ 覆盖 9:15 集合竞价、9:30 真开盘、12:57 午后预热、13:00 下午开盘四个边沿，避免最长 60s 的调度延迟。
  * - 非交易时段（market_status 既不是 OPEN 也不是 PREMARKET）整轮跳过
  * - 主调度和 edge watcher 共享 running 锁，避免并发执行 tick
  * - PREMARKET（9:15-9:30 / 12:57-13:00）也允许决策，单子挂 PENDING 等 MatchEngine 在 OPEN 后撮合
@@ -43,8 +43,8 @@ public class StrategyScheduler {
     }
 
     /**
-     * 每 5 秒轻量探一次 gateway health 的 market_status，边沿检测 ≠tradable → tradable。
-     * 触发时立刻补跑一次主 tick；非边沿只更新缓存的 lastObservedStatus 不做事。
+     * 每 5 秒轻量探一次 gateway health 的 market_status，边沿检测：status 变化且新状态 tradable 就补 tick。
+     * 覆盖 CLOSED→PREMARKET（9:15）、PREMARKET→OPEN（9:30）、BREAK→PREMARKET（12:57）、PREMARKET→OPEN（13:00）。
      */
     @Scheduled(fixedDelay = 5_000, initialDelay = 20_000)
     public void edgeWatcher() {
@@ -59,9 +59,7 @@ public class StrategyScheduler {
         }
         String prev = lastObservedStatus.getAndSet(status);
         if (prev.equals(status)) return;
-        boolean wasTradable = isTradable(prev);
-        boolean nowTradable = isTradable(status);
-        if (!wasTradable && nowTradable) {
+        if (isTradable(status)) {
             log.info("[strategy-sched] market edge {} → {}, firing extra tick", prev, status);
             executeTick("edge:" + prev + "→" + status);
         } else {
