@@ -1,0 +1,12 @@
+src/
+pom.xml
+!target/backend-java-*.jar
+target/classes/
+target/generated-sources/
+target/maven-archiver/
+target/maven-status/
+target/test-classes/
+data/
+logs/
+*.iml
+.idea/

@@ -1,0 +1,48 @@
+services:
+  gateway-python:
+    build: ./gateway-python
+    container_name: aitrade-gateway
+    restart: unless-stopped
+    env_file:
+      - ./gateway-python/.env
+    volumes:
+      - ./gateway-python/data:/app/data
+      - ./gateway-python/logs:/app/logs
+      - ./doc:/app/doc:ro
+    networks:
+      - aitrade
+    mem_limit: 256m
+    mem_reservation: 128m
+
+  backend-java:
+    build: ./backend-java
+    container_name: aitrade-backend
+    restart: unless-stopped
+    environment:
+      - GATEWAY_PYTHON_BASE_URL=http://gateway-python:8000
+    volumes:
+      - ./backend-java/data:/app/data
+      - ./backend-java/logs:/app/logs
+    networks:
+      - aitrade
+    depends_on:
+      - gateway-python
+    mem_limit: 512m
+    mem_reservation: 256m
+
+  frontend:
+    build: ./frontend-vue
+    container_name: aitrade-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    networks:
+      - aitrade
+    depends_on:
+      - backend-java
+    mem_limit: 64m
+    mem_reservation: 16m
+
+networks:
+  aitrade:
+    driver: bridge

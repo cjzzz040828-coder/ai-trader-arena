@@ -1,0 +1,11 @@
+node_modules/
+src/
+public/
+.vite/
+*.config.ts
+*.config.js
+tsconfig*.json
+package*.json
+.env*
+!dist/
+!nginx.conf
