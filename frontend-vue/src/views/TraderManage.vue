@@ -278,12 +278,15 @@ async function onDecideNow(t: TraderVO) {
   // 跳转前立刻发起后端决策请求，结果落到 trader 的活动流里，用户在新页面会看到一切发生
   if (t.strategyType === 'LLM') {
     ElMessage.info({ message: `已发起 LLM 决策，跳转到活动页实时观察...`, duration: 3000 })
-    // 不 await：发起后立刻跳页，让用户看 SSE 推送
-    api.trade.decideNow(t.id).catch(e => {
+    // 不 await：发起后立刻跳页，让用户看 SSE 推送。
+    // timeout 给 30 分钟——LLM 多轮推理 + tools 偶尔会跑 5~10 分钟，
+    // 默认 120s 会让用户已经在活动页看到决策完成、却又收到一条"超时"误报。
+    api.trade.decideNow(t.id, 30 * 60 * 1000).catch(e => {
       ElNotification.error({
         title: '决策请求失败',
-        message: e?.response?.data?.message || '请检查 LLM 配置和后端日志',
-        duration: 8000
+        message: formatDecideError(e),
+        duration: 12000,
+        dangerouslyUseHTMLString: true,
       })
     })
     router.push(`/llm-activity/${t.id}`)
@@ -299,13 +302,49 @@ async function onDecideNow(t: TraderVO) {
     showDecideResultDialog(t, r)
   } catch (e: any) {
     ElMessageBox.alert(
-      e?.response?.data?.message || e?.message || '决策请求失败，请查看后端日志',
+      formatDecideError(e),
       `✗ 决策失败 - ${t.name}`,
-      { type: 'error', confirmButtonText: '我知道了' }
+      { type: 'error', confirmButtonText: '我知道了', dangerouslyUseHTMLString: true }
     ).catch(() => {})
   } finally {
     decidingId.value = null
   }
+}
+
+async function onStopLlm(t: TraderVO) {
+  try {
+    const r = await api.llm.cancel(t.id)
+    if (r.requested) {
+      ElMessage.success(`已停止 [${t.name}] 的决策（HTTP 已中断）`)
+    } else {
+      ElMessage.info(r.reason || '当前没有正在运行的决策')
+    }
+  } catch (e: any) {
+    ElMessage.error('停止失败: ' + (e?.response?.data?.message || e?.message || e))
+  }
+}
+
+/**
+ * 把 axios 错误展开成"人看得懂"的多行 HTML：
+ *   HTTP 状态码 + 后端 message + 兜底原始 message + 排查提示。
+ * 没拿到后端 body 时（网络挂了 / CORS / 后端 down），明确告诉用户后端没回。
+ */
+function formatDecideError(e: any): string {
+  const status = e?.response?.status
+  const data = e?.response?.data
+  const backendMsg = data?.message || data?.error || (typeof data === 'string' ? data : '')
+  const rawMsg = e?.message || ''
+  const lines: string[] = []
+  if (status) lines.push(`<b>HTTP ${status}</b>`)
+  if (backendMsg) lines.push(`后端: ${escapeHtml(String(backendMsg))}`)
+  if (!backendMsg && rawMsg) lines.push(`网络: ${escapeHtml(rawMsg)}`)
+  if (lines.length === 0) lines.push('请求未拿到响应，后端可能未运行或网关不通')
+  lines.push(`<span style="opacity:.6;font-size:12px">排查：Java 控制台搜 "decide-now ... failed" / "构造市场视图失败"；或 curl http://localhost:8000/watchlist 看 Python 网关</span>`)
+  return lines.join('<br/>')
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
 }
 
 /** 展示决策结果。同步策略走这里；LLM 不走这里（直接跳活动页）。 */
@@ -465,6 +504,9 @@ onMounted(() => {
                      size="small" type="success" plain
                      :loading="decidingId === row.id"
                      @click="onDecideNow(row)">决策</el-button>
+          <el-button v-if="row.strategyType === 'LLM'"
+                     size="small" type="danger" plain
+                     @click="onStopLlm(row)">停止</el-button>
           <el-button v-if="row.strategyType === 'MA' || row.strategyType === 'INDICATOR' || row.strategyType === 'SCRIPT' || row.strategyType === 'LLM'"
                      size="small" type="info" plain
                      @click="onBacktest(row)">回测</el-button>

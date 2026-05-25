@@ -450,8 +450,8 @@ export const api = {
       http.post(`/traders/${id}/reset`) as unknown as Promise<TraderVO>,
     testLlm: (id: number) =>
       http.post(`/traders/${id}/test-llm`, null, { timeout: 120000 }) as unknown as Promise<TestLlmResult>,
-    decideNow: (id: number) =>
-      http.post(`/traders/${id}/decide-now`, null, { timeout: 120000 }) as unknown as Promise<DecideNowResult>,
+    decideNow: (id: number, timeout = 120000) =>
+      http.post(`/traders/${id}/decide-now`, null, { timeout }) as unknown as Promise<DecideNowResult>,
     positions: (traderId: number) =>
       http.get(`/traders/${traderId}/positions`) as unknown as Promise<PositionVO[]>,
     orders: (traderId: number, limit = 50) =>
