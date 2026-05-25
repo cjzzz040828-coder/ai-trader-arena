@@ -29,9 +29,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * LLM Executor 走 OpenAI 兼容的 function calling 模式。
@@ -53,7 +56,7 @@ import java.util.Map;
 public class LlmStrategyExecutor implements StrategyExecutor {
 
     private static final int MAX_ROUNDS = 10;
-    private static final int WATCHLIST_OVERVIEW = 60;
+    private static final int WATCHLIST_OVERVIEW = 500;
     private static final int RECENT_TRADES_IN_PROMPT = 10;
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final RestClient HTTP = RestClient.builder()
@@ -82,14 +85,26 @@ public class LlmStrategyExecutor implements StrategyExecutor {
             return List.of();
         }
 
+        // 上一轮还在跑（多见于 LLM read 接近 readTimeout）不是"失败"，静默跳过，
+        // 不要在 activity 历史里制造一条假的 failed 决策。
+        if (inFlightRegistry.current(trader.getId()) != null) {
+            log.debug("[strategy] LLM trader {} previous decision still in-flight, skip silently", trader.getId());
+            return List.of();
+        }
+
         long decisionId = activityPublisher.startDecision(trader.getId());
         if (!inFlightRegistry.tryAcquire(trader.getId(), decisionId)) {
-            pub(decisionId, trader, "failed", null, null, null, null, null, "上一轮决策尚未结束，本次跳过");
             activityPublisher.finishDecision(trader.getId(), decisionId);
+            log.debug("[strategy] LLM trader {} lost in-flight race, skip silently", trader.getId());
             return List.of();
         }
 
         try {
+            // 注册当前线程到 cancelRegistry：用户点停止时会 interrupt 此线程，
+            // 让阻塞在 HTTP send() 上的调用立即抛 InterruptedException 退出，
+            // 不必等 readTimeout (180s) 自然返回。
+            cancelRegistry.registerThread(trader.getId(), Thread.currentThread());
+
             String systemPrompt = buildSystemPrompt();
             String userPrompt = buildInitialUserMessage(trader, ctx);
             String promptJson;
@@ -146,6 +161,15 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                     // 某些 LLM 网关响应 Content-Type 是 octet-stream，让 Jackson 自己解析字节流避开 converter 校验
                     resp = raw == null ? null : MAPPER.readValue(new String(raw, StandardCharsets.UTF_8), MAP_TYPE_REF);
                 } catch (Exception e) {
+                    // cancel API 通过 thread.interrupt() 打断 HTTP send()，
+                    // 抛出的 ResourceAccessException 在这里捕获 → 走 cancelled 分支。
+                    if (cancelRegistry.isCancelled(trader.getId(), decisionId)) {
+                        log.info("[strategy] LLM trader {} round {} HTTP cancelled by user",
+                                trader.getId(), round);
+                        pub(decisionId, trader, "cancelled", round, null, null, null, null,
+                                "用户在 LLM 等待中取消（HTTP 已中断）");
+                        return List.of();
+                    }
                     log.error("[strategy] LLM trader {} round {} HTTP failed: {}",
                             trader.getId(), round, e.getMessage());
                     pub(decisionId, trader, "failed", round, null, null, null, null,
@@ -261,6 +285,9 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                     "达到最大轮次 " + MAX_ROUNDS + "，强制结束。tool_calls=" + totalToolCalls + " placed=" + placedOrders);
             return List.of();
         } finally {
+            cancelRegistry.unregisterThread(trader.getId(), Thread.currentThread());
+            // 清除 interrupt 标志，避免本线程后续被复用时携带脏中断状态。
+            Thread.interrupted();
             inFlightRegistry.release(trader.getId());
             // 清当前 decisionId 的取消标志，避免 cancelledDecisionByTrader 缓慢累积；
             // clear 只在 traderId 上的标志匹配本 decisionId 时移除，不会误伤后续决策。
@@ -321,19 +348,22 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                 你是一个 A 股量化交易决策助手。你将收到用户的投资策略偏好、账户状态、当前持仓、watchlist 概览与最近成交。
 
                 工作流程：
-                1. 阅读初始信息，按投资策略筛出值得关注的 3~6 只股票。
-                2. 调用 get_stock_analysis(code) / get_minute_chart(code) 查具体数据，必要时 get_recent_trades(limit) 查历史。
+                1. **基于全盘技术快照初筛**：用户消息里的 "Watchlist 全盘技术快照" 已经把所有标的的现价、当日涨跌、MA5/10/20、5 日涨跌、量比一次性给齐了——**这就是你的初筛工作台，请认真扫一遍全盘，再按投资策略圈出 3~5 只重点关注标的**。不要光看前几行就下结论。
+                2. 对圈出的 3~5 只调用 get_stock_analysis(code) 看最近 10 根 K 线 OHLC + 20 日涨跌，必要时 get_minute_chart(code) 看今日分时；get_recent_trades(limit) 看自己历史成交。
+                   - **扫描宽度建议**：本轮深查 3~5 只**不同**标的即可，避免每次只押同样几只老熟脸——全盘快照已经覆盖全部 watchlist，你能看到的远比"几只熟脸"多。
+                   - **预算硬约束**：累计工具调用达到 6 次后必须开始下单，不允许继续查询——剩下的额度要留给 place_order / cancel_order，否则会撞最大轮次被强制中断。
                 3. 决策后通过 place_order(code, side, amount, price) 下单；可以连续下多笔。
                 4. 如有未成交的 PENDING 单且原决策已不再合理（如行情反转、关键位破位、挂价过远难以成交），可调用 get_pending_orders 查看挂单列表，然后用 cancel_order(order_id) 撤销。撤单会立即释放冻结资金/持仓，撤完即可重新下单。
                 5. 完成后直接给一段简短总结（不再调任何工具），决策结束。
                 6. **观望需要前提**：仅当当前持仓已 ≥ 3 只且每只都健康（无明显风险信号、未到止盈/止损位、技术形态完好）时，才允许回复一句话说明观望理由并结束。否则不允许"看完什么都不做"——必须本轮至少做一笔实际操作（建仓 / 加仓 / 止盈 / 止损 / 调仓换股），按你的策略选最合理的一笔。
 
                 约束：
-                - amount 必须是 100 的整数倍（A 股最小买卖单位）；price 不传会用现价。
+                - amount 必须是 100 的整数倍（A 股最小买卖单位）。
+                - **限价单规则（很重要）**：BUY 的 price 是"成交价上限"，挂价必须 ≥ 现价才会成交；SELL 的 price 是"成交价下限"，挂价必须 ≤ 现价才会成交。**反向挂（BUY 比现价低 / SELL 比现价高）= 等回踩，单子卡在 PENDING 冻结资金/持仓，往往一天都不成交，不是"抄底/逢高出"**。想立即按市价成交：**不传 price**（系统用最新快照）。想加滑点缓冲：BUY 略高于现价 / SELL 略低于现价——多冻结的钱成交后自动回流。挂价反向偏离 >1% 时 place_order 响应会带 warning，看到 warning 一般应撤单重挂或不传 price。
                 - 同一股票若已有 PENDING 单不能再下单；T+1：当日买入的股票当日不能卖。
                 - cancel_order 只能撤本 trader 的 PENDING 单（系统已强制校验，撤别人的会报错）。
                 - 同名工具调用不要重复（已查过的 code 别再查）。
-                - 总工具调用不要超过 10 轮，请高效决策。
+                - **总工具调用次数（含查询+下单）≤ 12 次**；HTTP 轮次最多 10 轮，超出会被系统强制中断。请把额度优先留给下单环节，高效决策。
                 - 中文交流；reason 字段或最终总结说明你做出该决策的依据。
                 """;
     }
@@ -397,17 +427,43 @@ public class LlmStrategyExecutor implements StrategyExecutor {
             }
         }
 
-        sb.append("\n# Watchlist 概览（共 ").append(ctx.watchlist().size())
-                .append(" 只，显示前 ").append(WATCHLIST_OVERVIEW).append("）\n");
-        int n = 0;
-        for (String code : ctx.watchlist()) {
-            if (n++ >= WATCHLIST_OVERVIEW) break;
-            Map<String, Object> row = ctx.snapshots().get(code);
-            if (row == null) continue;
+        // watchlist 截断不能按固定顺序——否则 LLM 永远只看到前 N 只、决策反复收敛到同一片标的。
+        // 策略：当前持仓必带（上下文不能丢）+ 剩余从 watchlist 随机抽样填满 WATCHLIST_OVERVIEW。
+        List<String> fullList = ctx.watchlist();
+        List<String> shown;
+        if (fullList.size() <= WATCHLIST_OVERVIEW) {
+            shown = new ArrayList<>(fullList);
+        } else {
+            LinkedHashSet<String> picked = new LinkedHashSet<>();
+            for (Position p : positions) picked.add(p.getStockCode());
+            List<String> pool = new ArrayList<>(fullList);
+            pool.removeAll(picked);
+            Collections.shuffle(pool, ThreadLocalRandom.current());
+            for (String code : pool) {
+                if (picked.size() >= WATCHLIST_OVERVIEW) break;
+                picked.add(code);
+            }
+            shown = new ArrayList<>(picked);
+        }
+
+        sb.append("\n# Watchlist 全盘技术快照（共 ").append(fullList.size())
+                .append(" 只，本轮展示 ").append(shown.size()).append(" 只，持仓必带）\n");
+        sb.append("字段格式：代码 名称 现价(当日%) MA5/10/20 5日% 量比Q（量比=今日量/5日均量，>1.5 显著放量）。");
+        sb.append("请基于这份全盘快照初筛，再用 get_stock_analysis / get_minute_chart 深查 3~5 只。\n");
+        for (String code : shown) {
+            Map<String, Object> snap = ctx.snapshots().get(code);
+            if (snap == null) continue;
+            Map<String, Object> brief = tools.getQuickSnapshot(code, ctx);
             sb.append("- ").append(code)
-                    .append(" ").append(row.getOrDefault("name", ""))
-                    .append(" 现价 ").append(row.getOrDefault("price", "?"))
-                    .append(" 涨跌 ").append(row.getOrDefault("change_pct", "?")).append("%\n");
+                    .append(" ").append(snap.getOrDefault("name", ""))
+                    .append(" ").append(brief.get("price"))
+                    .append("(").append(brief.get("change_pct")).append("%)")
+                    .append(" MA").append(brief.get("ma5"))
+                    .append("/").append(brief.get("ma10"))
+                    .append("/").append(brief.get("ma20"))
+                    .append(" 5d").append(brief.get("change_5d_pct")).append("%")
+                    .append(" Q").append(brief.get("vol_ratio"))
+                    .append("\n");
         }
 
         sb.append("\n请按你的策略思考并通过工具完成本轮决策。");
@@ -444,14 +500,14 @@ public class LlmStrategyExecutor implements StrategyExecutor {
                                 "required", List.of()
                         )),
                 fnTool("place_order",
-                        "下买入或卖出订单。amount 必须是 100 的整数倍。price 不传则用现价（推荐）。下单成功会返回 order_id，下个 10s tick 撮合。",
+                        "下买入或卖出订单。amount 必须是 100 的整数倍。**限价规则：BUY 挂价是上限（必须 ≥ 现价才成交），SELL 挂价是下限（必须 ≤ 现价才成交）；反向挂会卡 PENDING 不成交。想立即成交：不传 price 用现价（推荐）。** 下单成功返回 order_id，下个 10s tick 撮合；挂价反向偏离 >1% 时响应会带 warning 字段。",
                         Map.of(
                                 "type", "object",
                                 "properties", Map.of(
                                         "code", Map.of("type", "string", "description", "6 位股票代码，必须在 watchlist 内"),
                                         "side", Map.of("type", "string", "enum", List.of("BUY", "SELL")),
                                         "amount", Map.of("type", "integer", "minimum", 100, "description", "股数，100 整数倍"),
-                                        "price", Map.of("type", "number", "description", "限价（可选，默认现价）")
+                                        "price", Map.of("type", "number", "description", "限价（可选，**强烈建议不传**。不传 = 拉最新报价 + 1% 滑点，下个 tick 必成交。传了等于限价单：BUY 低于现价 / SELL 高于现价会卡 PENDING 直到行情回踩，多轮推理期间行情可能已经走开，限价单大概率成不了交。除非你明确想『挂单等回踩』，否则一律省略 price。)")
                                 ),
                                 "required", List.of("code", "side", "amount")
                         )),
@@ -572,11 +628,23 @@ public class LlmStrategyExecutor implements StrategyExecutor {
         return s.length() > n ? s.substring(0, n) + "..." : s;
     }
 
-    private static org.springframework.http.client.SimpleClientHttpRequestFactory timeoutFactory() {
-        org.springframework.http.client.SimpleClientHttpRequestFactory f =
-                new org.springframework.http.client.SimpleClientHttpRequestFactory();
-        f.setConnectTimeout((int) Duration.ofSeconds(10).toMillis());
-        f.setReadTimeout((int) Duration.ofSeconds(60).toMillis());  // 多轮工具调用，单次 read 给宽点
+    /**
+     * 用 JDK11+ 自带的 java.net.http.HttpClient 作为 RestClient 底层。
+     *
+     * 历史上用 SimpleClientHttpRequestFactory（基于古老的 HttpURLConnection），在某些 HTTPS +
+     * 大 body（带 tools 定义的 LLM 请求）场景下会把 response 的 Content-Type 错误地报成
+     * application/octet-stream，导致 Spring RestClient 找不到 converter 提取响应。
+     * JdkClientHttpRequestFactory 是 Spring 6 推荐项，行为更稳定，无需额外依赖。
+     *
+     * readTimeout 给到 180s：SiliconFlow 上 deepseek 带 tools 的复杂推理偶尔会到 60-120s
+     * （首 token 慢 + tool_calls 多），60s 不够。MAX_ROUNDS=10 也是分多轮调用，每轮独立计时。
+     */
+    private static org.springframework.http.client.JdkClientHttpRequestFactory timeoutFactory() {
+        java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(15))
+                .build();
+        var f = new org.springframework.http.client.JdkClientHttpRequestFactory(client);
+        f.setReadTimeout(Duration.ofSeconds(180));
         return f;
     }
 }
