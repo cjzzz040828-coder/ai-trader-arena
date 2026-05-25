@@ -183,6 +183,19 @@ function gotoDetail(traderId: number) {
   router.push({ name: 'llm-activity-detail', params: { traderId } })
 }
 
+async function onStopLlm(t: TraderVO) {
+  try {
+    const r = await api.llm.cancel(t.id)
+    if (r.requested) {
+      ElMessage.success(`已停止 [${t.name}]（HTTP 已中断）`)
+    } else {
+      ElMessage.info(r.reason || '当前没有正在运行的决策')
+    }
+  } catch (e: any) {
+    ElMessage.error('停止失败: ' + (e?.response?.data?.message || e?.message || e))
+  }
+}
+
 async function clearAll() {
   if (llmTraders.value.length === 0) {
     ElMessage.info('当前没有 LLM trader')
@@ -305,6 +318,8 @@ function fmtPct(n: number | null | undefined): string {
             <div class="thinking">
               <span class="dot-anim"></span>
               <span class="text">{{ cardViews[t.id]?.currentSummary || '正在思考…' }}</span>
+              <el-button size="small" type="danger" plain class="stop-btn"
+                         @click.stop="onStopLlm(t)">停止</el-button>
             </div>
           </template>
           <template v-else-if="cardViews[t.id]?.latestStatus">
@@ -443,6 +458,9 @@ function fmtPct(n: number | null | undefined): string {
   font-size: 14px;
   flex: 1;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.thinking .stop-btn {
+  flex: 0 0 auto;
 }
 .dot-anim {
   display: inline-block;
