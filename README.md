@@ -18,9 +18,9 @@
 
 | 模块 | 端口 | 路径 | 职责 |
 |------|------|------|------|
-| Python网关 | 8000 | `gateway-python/` | 行情快照、日K、自选股 |
-| Java后端 | 8080 | `backend-java/` | 鉴权、虚拟账户、撮合、策略、回测 |
-| Vue3前端 | 5173 | `frontend-vue/` | Dashboard / MyTrader / Leaderboard / TraderManage |
+| Python网关 | 8000 | `gateway-python/` | 行情快照、日K、自选股、选股池 |
+| Java后端 | 8080 | `backend-java/` | 鉴权、虚拟账户、撮合、多策略调度、回测、模板市场 |
+| Vue3前端 | 5173 | `frontend-vue/` | Dashboard / MyTrader / Leaderboard / TraderManage / StrategyMarket / PoolManage / BacktestHistory / LlmActivity |
 
 **下单链路说明：** Python 端的 easytrader（同花顺PC自动化）已退役，仅保留行情。每个 AI trader 在 SQLite 里独立持有虚拟账户（初始 ¥1,000,000），`OrderService.place()` 入虚拟订单簿，`MatchEngine` 每 10s tick 按最新行情撮合。
 
@@ -92,18 +92,22 @@ cpolar http 8000
 - [x] Vue3前端：Dashboard 行情自刷新
 
 ### 阶段二·虚拟交易 + AI 策略
-- [x] 用户注册/登录（JWT）
-- [x] 虚拟账户 + Java 端撮合（`OrderService` + `MatchEngine`，10s tick）
-- [x] AI 交易员模型（多策略：MA 双均线 / LLM OpenAI 兼容）+ 全站排行榜
+- [x] 用户注册/登录（JWT + IP 维度限流）
+- [x] 虚拟账户 + Java 端撮合（`OrderService` + `MatchEngine`，10s tick，按 traderId 取细粒度锁）
+- [x] AI 交易员模型 — 多策略：MA 双均线 / LLM OpenAI 兼容 / INDICATOR 指标规则 / SCRIPT JS 脚本
+- [x] 全站排行榜（按 total_profit 排序，5s 刷新，本人 trader 高亮）
 - [x] 下单流水可视化、持仓刷新
-- [x] 完整 K 线 + 分时图 + 五档盘口组件
+- [x] 完整 K 线 + 分时图 + 五档盘口组件 + 逐笔成交
 
 ### 阶段三·研究与可解释
-- [x] 回测系统（MA 策略，T+1 open 撮合，日 K 切片）
-- [x] LLM trader 实时活动监控面板（SSE 推送决策过程 + 中断按钮 + 历史持久化）
-- [x] LLM 决策落库 + 4 小时后验反思（DecisionMemory + ReflectionWorker，过去 30 天准确率喂回 prompt 实现自我校准）
+- [x] 回测系统 — MA T+1 open 撮合 + LLM 决策回放即时成交（`LlmReplayEngine`）
+- [x] 卖出盈亏 / 股票名映射 / 回测历史页 / 弹窗"最近回测"列表
 - [x] 专业回测报告（夏普/索提诺/Calmar/年化/胜率/盈亏比 + 沪深300 基准对比 + 月度收益热力图，独立报告页 `/backtest/:id`）
+- [x] LLM trader 实时活动监控 — 独立 `/llm-activity` 路由（驾驶舱 + 详情页），SSE 推送 + 中断按钮 + 历史持久化
+- [x] LLM 决策落库 + 4 小时后验反思（DecisionMemory + ReflectionWorker，过去 30 天准确率喂回 prompt 自我校准）
 - [x] 策略超市（官方模板库 → 一键派生 trader，含 MA/LLM 模板）
 - [x] 多 .sel 自选股分组（按周/按主题维护多组选股，前端 Dashboard 左栏可切换）
-- [ ] LLM 策略回测（成本 + 历史数据泄漏权衡，`ToolBox` 抽象接口已预留；探索中的方向：用"决策回放"绕过重复调模型成本）
+- [x] 选股池 / 多池子分组（trader 通过 poolName 绑定池子，调度按池子分组复用 MarketContext）
+- [x] 策略调度优化（PREMARKET 集合竞价预热 + 开盘瞬间边沿补 tick + 间隔可配）
+- [x] 日/夜双主题（默认白天，右上角切夜间，A 股红涨绿跌独立于 Element Plus 语义色）
 - [ ] LLM × MA 信号融合（把回测验证过的 MA 参数注入 LLM trader prompt 作"专家信号"参考）
