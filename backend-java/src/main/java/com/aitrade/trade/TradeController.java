@@ -96,8 +96,8 @@ public class TradeController {
         AiTrader trader = traderService.getOwned(id, userId);
         String type = trader.getStrategyType();
         if (!"MA".equals(type) && !"LLM".equals(type) && !"INDICATOR".equals(type)
-                && !"SCRIPT".equals(type) && !"CTA".equals(type)) {
-            throw ApiException.badRequest("仅 MA / LLM / INDICATOR / SCRIPT / CTA 策略 trader 可以手动触发决策");
+                && !"SCRIPT".equals(type)) {
+            throw ApiException.badRequest("仅 MA / LLM / INDICATOR / SCRIPT 策略 trader 可以手动触发决策；CTA 由后台调度自动执行");
         }
         if (Integer.valueOf(0).equals(trader.getEnabled())) {
             throw ApiException.badRequest("trader 已停用，请先在管理页启用调度");

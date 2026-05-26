@@ -60,11 +60,21 @@ const visibleRows = computed(() => {
   return props.compact ? arr.slice(0, 4) : arr
 })
 
-// 价格颜色：与上一笔成交价比较，逐笔涨绿（红涨绿跌，A股标准）。这里简化：buyorsell 决定颜色
-// 0=主动买(B,外盘) → 上涨色；1=主动卖(S,内盘) → 下跌色；2=中性
-function priceColor(bs: number): string {
-  if (bs === 0) return 'var(--brand-up)'
-  if (bs === 1) return 'var(--brand-down)'
+// 价格颜色用 tick-rule：现价 vs 上一笔，A 股红涨绿跌。
+// 旧实现只信 buyorsell 字段，但 mootdx/tdxpy 不同版本里这个字段语义不稳，
+// 实测大段时间窗口里几乎全是 1，导致明细一片绿/红，体验明显不真实。
+// idx 是 visibleRows 里的位置（0=最新），更早的一笔在 idx+1。
+function priceColor(idx: number, list: TickItem[]): string {
+  const cur = list[idx]
+  if (!cur) return 'var(--brand-text-primary)'
+  const prev = list[idx + 1]
+  if (prev && prev.price > 0) {
+    if (cur.price > prev.price) return 'var(--brand-up)'    // uptick → 主动买（红）
+    if (cur.price < prev.price) return 'var(--brand-down)'  // downtick → 主动卖（绿）
+  }
+  // 同价位 / 无前一笔：退到 buyorsell 兜底（0=买 1=卖 2=中性）
+  if (cur.buyorsell === 0) return 'var(--brand-up)'
+  if (cur.buyorsell === 1) return 'var(--brand-down)'
   return 'var(--brand-text-primary)'
 }
 
@@ -85,8 +95,8 @@ function fmtAmount(amount: number): string {
     <div v-else>
       <div v-for="(t, i) in visibleRows" :key="(t.time || '') + i" class="tick-row">
         <span class="time">{{ t.time }}</span>
-        <span class="price" :style="{ color: priceColor(t.buyorsell) }">{{ t.price.toFixed(2) }}</span>
-        <span class="amt" :style="{ color: priceColor(t.buyorsell) }">{{ fmtAmount(t.amount) }}</span>
+        <span class="price" :style="{ color: priceColor(i, visibleRows) }">{{ t.price.toFixed(2) }}</span>
+        <span class="amt" :style="{ color: priceColor(i, visibleRows) }">{{ fmtAmount(t.amount) }}</span>
       </div>
     </div>
   </div>

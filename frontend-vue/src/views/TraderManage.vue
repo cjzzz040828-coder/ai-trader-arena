@@ -585,7 +585,7 @@ onMounted(() => {
       <el-table-column label="操作" width="500" fixed="right" align="center" class-name="ops-cell">
         <template #default="{ row }">
           <div class="ops-row">
-          <el-button v-if="['MA','LLM','INDICATOR','SCRIPT','CTA'].includes(row.strategyType)"
+          <el-button v-if="['MA','LLM','INDICATOR','SCRIPT'].includes(row.strategyType)"
                      size="small" type="success" plain
                      :loading="decidingId === row.id"
                      @click="onDecideNow(row)">决策</el-button>
