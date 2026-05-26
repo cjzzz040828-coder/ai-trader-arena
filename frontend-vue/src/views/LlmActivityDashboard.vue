@@ -185,14 +185,22 @@ function gotoDetail(traderId: number) {
 
 async function onStopLlm(t: TraderVO) {
   try {
-    const r = await api.llm.cancel(t.id)
-    if (r.requested) {
-      ElMessage.success(`已停止 [${t.name}]（HTTP 已中断）`)
-    } else {
-      ElMessage.info(r.reason || '当前没有正在运行的决策')
-    }
+    await ElMessageBox.confirm(
+      `禁用 [${t.name}]？\n` +
+      '· 中断当前正在进行的决策（HTTP 立即打断）\n' +
+      '· trader 置为停用，调度器不再选中它\n' +
+      '· 想恢复请去「我的 trader」页面重新启用',
+      '确认禁用',
+      { confirmButtonText: '确认禁用', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  try {
+    await api.llm.cancel(t.id).catch(() => null)
+    await api.trade.updateTrader(t.id, { enabled: false })
+    ElMessage.success(`已禁用 [${t.name}]`)
+    await loadTraders()
   } catch (e: any) {
-    ElMessage.error('停止失败: ' + (e?.response?.data?.message || e?.message || e))
+    ElMessage.error('禁用失败: ' + (e?.response?.data?.message || e?.message || e))
   }
 }
 
@@ -319,7 +327,7 @@ function fmtPct(n: number | null | undefined): string {
               <span class="dot-anim"></span>
               <span class="text">{{ cardViews[t.id]?.currentSummary || '正在思考…' }}</span>
               <el-button size="small" type="danger" plain class="stop-btn"
-                         @click.stop="onStopLlm(t)">停止</el-button>
+                         @click.stop="onStopLlm(t)">禁用</el-button>
             </div>
           </template>
           <template v-else-if="cardViews[t.id]?.latestStatus">
