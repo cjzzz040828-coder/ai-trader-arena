@@ -10,6 +10,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 一次策略调度 tick 内的市场视图。多个 trader 共用同一个实例，避免重复请求网关。
@@ -29,7 +30,7 @@ public class MarketContext {
     private final boolean actualMarketOpen;
     private final boolean premarket;
     private final String marketStatus;
-    protected final Map<String, List<Map<String, Object>>> barsCache = new HashMap<>();
+    protected final Map<String, List<Map<String, Object>>> barsCache = new ConcurrentHashMap<>();
 
     public MarketContext(PythonGatewayClient gateway) {
         this(gateway, false, null);
