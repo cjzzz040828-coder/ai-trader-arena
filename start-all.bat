@@ -1,25 +1,25 @@
 @echo off
-title aiTrade Start All
+title StratForge Start All
 
 set ROOT=%~dp0
 
 echo.
 echo [1/3] Starting Python Gateway
-start "aiTrade-Python" cmd /k "%ROOT%gateway-python/run.bat"
+start "StratForge-Python" cmd /k "%ROOT%gateway-python/run.bat"
 
 echo Waiting 8 seconds for Python
 timeout /t 8 /nobreak >nul
 
 echo.
 echo [2/3] Starting Java Backend
-start "aiTrade-Java" cmd /k "%ROOT%backend-java/run.bat"
+start "StratForge-Java" cmd /k "%ROOT%backend-java/run.bat"
 
 echo Waiting 25 seconds for Java first run takes longer
 timeout /t 25 /nobreak >nul
 
 echo.
 echo [3/3] Starting Frontend
-start "aiTrade-Frontend" cmd /k "%ROOT%frontend-vue/run.bat"
+start "StratForge-Frontend" cmd /k "%ROOT%frontend-vue/run.bat"
 
 echo.
 echo ============================================================

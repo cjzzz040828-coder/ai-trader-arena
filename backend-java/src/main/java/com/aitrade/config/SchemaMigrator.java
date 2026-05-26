@@ -291,16 +291,34 @@ public class SchemaMigrator {
             String ctaBreakout = "{\"entry\":{\"type\":\"BREAKOUT\",\"lookback\":20},"
                     + "\"stopLoss\":{\"trailingPct\":5.0},"
                     + "\"exitOnReverseSignal\":false}";
+            // 双均线 10/30 经典中线版：过滤短期噪音，比 5/20 更稳健。
+            String ctaDualMaMid = "{\"entry\":{\"type\":\"DUAL_MA\",\"shortPeriod\":10,\"longPeriod\":30},"
+                    + "\"stopLoss\":{\"fixedPct\":8.0,\"trailingPct\":5.0},"
+                    + "\"exitOnReverseSignal\":true}";
+            // 海龟交易法简化版（Richard Dennis 1983 经典）：20 日通道突破入场，
+            // 配 10% 固定止损 + 8% 跟踪止损（原版用 2N ATR，这里用百分比近似）。
+            String ctaTurtle = "{\"entry\":{\"type\":\"BREAKOUT\",\"lookback\":20},"
+                    + "\"stopLoss\":{\"fixedPct\":10.0,\"trailingPct\":8.0},"
+                    + "\"exitOnReverseSignal\":true}";
 
             int a = jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
                     "cta-dual-ma-5-20", "CTA 双均线趋势",
                     "5/20 双均线金叉买入、死叉卖出；同时配 8% 固定止损 + 5% 跟踪止损。比单纯 MA 更稳健——亏到 8% 强制止损，盈利后回撤 5% 止盈出场。",
                     "CTA", ctaDualMa, "趋势,CTA,止损", 50);
+            int c = jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "cta-dual-ma-10-30", "CTA 双均线中线（10/30 经典）",
+                    "10/30 双均线经典中线版：相比 5/20 过滤短期震荡噪音，捕捉更稳的中期趋势。配 8% 固定止损 + 5% 跟踪止损 + 反向信号离场。A 股震荡市友好，胜率较高但单笔利润薄。",
+                    "CTA", ctaDualMaMid, "趋势,CTA,中线", 55);
             int b = jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
                     "cta-breakout-20d", "CTA 20 日突破跟踪",
                     "唐奇安通道思想：今日收盘价突破过去 20 日最高价时买入，5% 跟踪止损让利润奔跑。突破策略经典玩法，适合追趋势。",
                     "CTA", ctaBreakout, "突破,CTA,跟踪止损", 60);
-            if (a + b > 0) log.info("[schema-migrator] seeded {} CTA template(s)", a + b);
+            int d = jdbc.update("INSERT OR IGNORE INTO strategy_template (code, name, description, strategy_type, default_params_json, tags, is_official, sort_order) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    "cta-turtle-20d", "CTA 海龟交易法（权威）",
+                    "海龟交易法简化版——Richard Dennis 1983 训练 23 个『海龟』交易员的经典系统，CTA 教科书必讲。20 日通道突破入场 + 10% 固定止损 + 8% 跟踪止损 + 反向信号离场（原版用 2N ATR 止损，本项目用百分比近似）。激进偏趋势，A 股震荡期胜率可能仅 30~40%，靠少数大赢面单子盈利；回撤可能 20%+，先回测再上实盘。",
+                    "CTA", ctaTurtle, "趋势,CTA,海龟,权威", 65);
+            int total = a + b + c + d;
+            if (total > 0) log.info("[schema-migrator] seeded {} CTA template(s)", total);
         } catch (Exception e) {
             log.warn("[schema-migrator] seed CTA templates failed: {}", e.getMessage());
         }

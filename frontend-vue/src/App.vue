@@ -23,8 +23,8 @@ async function onLogout() {
   <div class="app">
     <header v-if="showHeader" class="app-header">
       <div class="header-left">
-        <h2>aiTrade</h2>
-        <span class="sub">· AI量化平台</span>
+        <h2>StratForge</h2>
+        <span class="sub">· 策略熔炉</span>
       </div>
       <nav class="header-center">
         <RouterLink to="/" class="link" :class="{ active: route.path === '/' }">Dashboard</RouterLink>

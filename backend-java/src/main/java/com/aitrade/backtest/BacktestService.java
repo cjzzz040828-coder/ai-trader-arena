@@ -36,8 +36,10 @@ public class BacktestService {
     private static final BigDecimal DEFAULT_INITIAL = new BigDecimal("1000000");
     private static final ObjectMapper JSON = new ObjectMapper();
     // 网关 bars 接口只能拉最近 N 根（BacktestEngine.BAR_COUNT=300），按周末/节假日打折后约支撑 1 年自然日窗口。
-    private static final int MAX_LOOKBACK_DAYS = 400;
-    private static final int MAX_WINDOW_DAYS = 400;
+    // 受 BacktestEngine.BAR_COUNT=500 实际约束（约 2 年自然日），上限同步压回 730 天
+    // 避免用户设了 1100 天但实际数据只有 730 天导致前 1 年是空回测。
+    private static final int MAX_LOOKBACK_DAYS = 730;
+    private static final int MAX_WINDOW_DAYS = 730;
     private final ExecutorService pool = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "backtest-worker");
         t.setDaemon(true);
@@ -79,12 +81,12 @@ public class BacktestService {
         LocalDate end = parseDate(req.getEndDate(), "endDate");
         if (start.isAfter(end)) throw ApiException.badRequest("startDate 必须不晚于 endDate");
 
-        // 网关 bars 接口只能拉最近 N 根（BacktestEngine.BAR_COUNT=300，约 1.2 年自然日）。
+        // 网关 bars 接口只能拉最近 N 根（BacktestEngine.BAR_COUNT=500，约 2 年自然日）。
         // 超出窗口的回测虽然能跑但会因 K 线稀疏报"交易日不足"或结果失真，提前给清晰错误信息。
         LocalDate today = LocalDate.now();
         if (start.isBefore(today.minusDays(MAX_LOOKBACK_DAYS))) {
             throw ApiException.badRequest("startDate 不能早于 " + MAX_LOOKBACK_DAYS
-                    + " 天前（gateway 日 K 只能拉最近约 1 年）");
+                    + " 天前（gateway 日 K 只能拉最近约 2 年）");
         }
         if (start.plusDays(MAX_WINDOW_DAYS).isBefore(end)) {
             throw ApiException.badRequest("回测窗口跨度不可超过 " + MAX_WINDOW_DAYS + " 天");

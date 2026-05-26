@@ -52,7 +52,10 @@ import java.util.function.IntConsumer;
 @RequiredArgsConstructor
 public class BacktestEngine {
 
-    private static final int BAR_COUNT = 300;
+    // BAR_COUNT 在 ECS 仅 1GB 内存、JVM heap 384MB 的实测约束下定为 500：
+    // watchlist 100~200 只票一次性预拉到内存里需要 ~250MB；BAR_COUNT 设到 800 时被压爆触发 OOM。
+    // 500 根日 K ≈ 2 年自然日（节假日扣减），够覆盖一轮主要市场环境。
+    private static final int BAR_COUNT = 500;
     private static final BigDecimal BUY_FRACTION = new BigDecimal("0.10");
     private static final int TRADING_DAYS_PER_YEAR = 252;
     /** 沪深 300 ETF（510300）作为基准。mootdx 同 bars 接口透传；拉不到时基准曲线会是空数组。 */
@@ -187,7 +190,7 @@ public class BacktestEngine {
                 placeSignal(trader, ctx, s, sandbox);
             }
 
-            // C. 记 today close 净值
+            // C. 记 today close 净值（同时作为下一交易日撮合的 prev_close 用于涨跌停判定）
             Map<String, BigDecimal> closeByCode = collectPricesAt(today, fullBars, codes, true);
             BigDecimal equity = sandbox.equity(closeByCode);
             equityCurve.add(new EquityPoint(today.toString(), equity));
@@ -195,12 +198,12 @@ public class BacktestEngine {
             // C2. 把 today high 喂给 sandbox，刷新所有持仓的 high_since_entry（CTA 跟踪止损用）
             sandbox.markHighWithDayHigh(collectHighsAt(today, fullBars, codes));
 
-            // D. 切到下一交易日：撮合 pending
+            // D. 切到下一交易日：撮合 pending（用今日 close 作为次日的 prev_close 做涨跌停校验）
             if (i + 1 < tradingDays.size()) {
                 LocalDate nextDay = tradingDays.get(i + 1);
                 sandbox.clearTodayBuys();
                 Map<String, BigDecimal> openByCode = collectPricesAt(nextDay, fullBars, codes, false);
-                List<BacktestSandbox.Fill> fills = sandbox.settleAtOpen(openByCode);
+                List<BacktestSandbox.Fill> fills = sandbox.settleAtOpen(openByCode, closeByCode);
                 for (BacktestSandbox.Fill f : fills) {
                     trades.add(new EngineTrade(
                             nextDay.toString(), f.code(),
@@ -362,23 +365,32 @@ public class BacktestEngine {
                 : gateway.watchlist(poolName);
         Object data = resp == null ? null : resp.get("data");
         List<String> out = new ArrayList<>();
+        int skippedSt = 0;
         if (data instanceof List<?> arr) {
             for (Object item : arr) {
                 if (item instanceof Map<?, ?> row) {
                     Object code = row.get("code");
                     if (code != null) {
                         String c = String.valueOf(code);
-                        out.add(c);
                         Object name = row.get("name");
-                        if (name != null && namesOut != null) {
-                            String n = String.valueOf(name);
-                            if (!n.isBlank() && !n.equals(c)) namesOut.put(c, n);
-                        }
+                        String n = name == null ? "" : String.valueOf(name);
+                        // ST / *ST 退市风险股流动性差、回测假设易跑偏，整体跳过
+                        if (isStName(n)) { skippedSt++; continue; }
+                        out.add(c);
+                        if (!n.isBlank() && !n.equals(c) && namesOut != null) namesOut.put(c, n);
                     }
                 }
             }
         }
+        if (skippedSt > 0) log.info("[backtest] filtered {} ST/退市风险 stocks from watchlist", skippedSt);
         return out;
+    }
+
+    /** ST 票判断：名称含 ST / *ST / S*ST 都视为风险股，统一过滤。 */
+    private static boolean isStName(String name) {
+        if (name == null) return false;
+        String up = name.toUpperCase().replace(" ", "");
+        return up.contains("ST") || up.startsWith("*");
     }
 
     /**

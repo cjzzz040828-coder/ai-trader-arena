@@ -42,7 +42,7 @@ async function submit() {
 <template>
   <div class="login-page">
     <div class="card">
-      <h2>aiTrade</h2>
+      <h2>StratForge</h2>
       <el-tabs v-model="mode" class="tabs">
         <el-tab-pane label="登录" name="login" />
         <el-tab-pane label="注册" name="register" />

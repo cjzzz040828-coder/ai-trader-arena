@@ -1,4 +1,6 @@
-# aiTrade 部署说明
+# StratForge 部署说明
+
+> 说明：服务器目录、容器名等保留 `aitrade` 历史前缀（首次部署时的命名），不影响对外展示。如需统一改名请整体停服迁移。
 
 ## 目标服务器
 
@@ -45,7 +47,7 @@ bash deploy/deploy.sh
 
 1. `mvn package -DskipTests` 出 fat JAR
 2. `npm run build` 出 `dist/`
-3. 把 JAR、dist、Python 源码、配置文件、`aitrade.db`、`.sel` 自选股汇总到临时目录
+3. 把 JAR、dist、Python 源码、配置文件、SQLite 数据库、`.sel` 监控列表汇总到临时目录
 4. tar over ssh 流式上传到 `/opt/aitrade/`
 5. ssh 触发 `docker compose up -d --build`
 
@@ -106,7 +108,7 @@ ssh root@8.137.119.18 'cd /opt/aitrade && docker compose logs <service>'
 
 调整 `backend-java/Dockerfile` 里 `JAVA_OPTS` 的 `-Xmx`（默认 384m），或调 `docker-compose.yml` 里 `mem_limit`。
 
-### gateway 拉行情失败
+### gateway 拉取数据失败
 
 ```bash
 # 进 gateway 容器手动测
@@ -124,6 +126,6 @@ ssh root@8.137.119.18 'docker exec -it aitrade-gateway curl -s http://push2.east
 - `backend-java/data/aitrade.db` （SQLite 库 + 用户数据）
 - `gateway-python/.env` （含 GATEWAY_TOKEN）
 - `gateway-python/data/` （池子运行时数据）
-- `doc/*.sel`、`doc/SelfStockInfo.json` （自选股，私密）
+- `doc/*.sel`、`doc/SelfStockInfo.json` （监控列表，私密）
 
 应用层密钥 `application.yml`（gateway token + JWT secret）被打包进 fat JAR（classpath），上传随 JAR 一起。

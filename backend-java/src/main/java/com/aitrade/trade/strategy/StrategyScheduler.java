@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * 周期触发 + 开盘边沿补一次 tick。
  *
- * - 主调度：每 ${strategy.interval-ms:60000}ms 拉市场视图、串行喂所有 enabled+!deleted+strategy_type∈(MA,LLM,INDICATOR) 的 trader
+ * - 主调度：每 ${strategy.interval-ms:60000}ms 拉市场视图、串行喂所有 enabled+!deleted+strategy_type∈(MA,LLM,INDICATOR,SCRIPT,CTA) 的 trader
  * - 边沿监听：每 5s 轻量 health 探一次 market_status；只要 status 变化且新状态 tradable（OPEN/PREMARKET）就补一次 tick
  *   ↳ 覆盖 9:15 集合竞价、9:30 真开盘、12:57 午后预热、13:00 下午开盘四个边沿，避免最长 60s 的调度延迟。
  * - 非交易时段（market_status 既不是 OPEN 也不是 PREMARKET）整轮跳过

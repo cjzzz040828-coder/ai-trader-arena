@@ -16,8 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 回测撮合沙盒回归测试。
  * 重点防 P1-2（限价 BUY 单 open > limit 强行成交）的回归。
  *
- * 资金守恒不变量：任意时刻 sandbox.equity(prices) ≈ initialBalance + 已实现盈亏
- * 这里所有用例都从 1_000_000 开始，没有跨日浮盈，所以 equity == 1_000_000。
+ * 交易成本：BUY +0.125%（滑点 + 佣金），SELL -0.175%（滑点 + 佣金 + 印花税）。
+ * 因此 BUY 后 equity 会略低于 INIT（建仓即"亏"成本），SELL 实现盈亏含费用。
  */
 class BacktestSandboxTest {
 
@@ -43,7 +43,8 @@ class BacktestSandboxTest {
 
     @Test
     void buy_openBelowLimit_filledAndRefundExtra() {
-        // limit=10, open=9（跳空低开），按 open=9 成交，多冻结的 100 元退回 balance
+        // limit=10, open=9（跳空低开），按 open=9 成交
+        // grossCost = 900, BUY 成本 0.125% → actualCost = 901.13, diff = 1000 - 901.13 = 98.87 退回
         BacktestSandbox sb = new BacktestSandbox(INIT);
         sb.enqueueBuy("000001", 100, new BigDecimal("10"));
 
@@ -53,16 +54,18 @@ class BacktestSandboxTest {
         assertEquals("BUY", fills.get(0).side());
         assertEquals(0, fills.get(0).price().compareTo(new BigDecimal("9")));
         assertEquals(0, sb.getFrozenBalance().compareTo(BigDecimal.ZERO));
-        // 实际花 900，初始 1_000_000 → balance=999_100
-        assertEquals(0, sb.getBalance().compareTo(new BigDecimal("999100")));
+        // 999000（冻结后） + 98.87（多冻退回）= 999098.87
+        assertEquals(0, sb.getBalance().compareTo(new BigDecimal("999098.87")));
         assertNotNull(sb.position("000001"));
         assertEquals(100, sb.position("000001").amount);
-        // 守恒：999_100 + 100×9 = 1_000_000
-        assertEquals(0, sb.equity(Map.of("000001", new BigDecimal("9"))).compareTo(INIT));
+        // equity at 9: 999098.87 + 100*9 = 999998.87 （比 INIT 少 1.13 元 = 成本）
+        assertEquals(0, sb.equity(Map.of("000001", new BigDecimal("9")))
+                .compareTo(new BigDecimal("999998.87")));
     }
 
     @Test
     void buy_openEqualsLimit_filledNoRefund() {
+        // grossCost = 1000, actualCost = 1001.25, frozen 不足补差 1.25
         BacktestSandbox sb = new BacktestSandbox(INIT);
         sb.enqueueBuy("000001", 100, new BigDecimal("10"));
 
@@ -70,8 +73,10 @@ class BacktestSandboxTest {
 
         assertEquals(1, fills.size());
         assertEquals(0, sb.getFrozenBalance().compareTo(BigDecimal.ZERO));
-        assertEquals(0, sb.getBalance().compareTo(new BigDecimal("999000")));
-        assertEquals(0, sb.equity(Map.of("000001", new BigDecimal("10"))).compareTo(INIT));
+        // 999000 + (-1.25 补差) = 998998.75
+        assertEquals(0, sb.getBalance().compareTo(new BigDecimal("998998.75")));
+        assertEquals(0, sb.equity(Map.of("000001", new BigDecimal("10")))
+                .compareTo(new BigDecimal("999998.75")));
     }
 
     @Test
@@ -89,24 +94,24 @@ class BacktestSandboxTest {
 
     @Test
     void sell_filled_balanceIncreased() {
-        // 先植入一个持仓：手工建仓 100@10
+        // 先建仓 100 @ open=10 → balance = 998998.75
         BacktestSandbox sb = new BacktestSandbox(INIT);
         sb.enqueueBuy("000001", 100, new BigDecimal("10"));
         sb.settleAtOpen(Map.of("000001", new BigDecimal("10")));
         sb.clearTodayBuys();
 
-        // 次日卖出 @11
+        // 次日卖出 100 @ open=11
+        // gross = 1100, SELL 成本 0.175% → income = 1098.08
         assertTrue(sb.enqueueSell("000001", 100, new BigDecimal("10")));
         List<BacktestSandbox.Fill> fills = sb.settleAtOpen(Map.of("000001", new BigDecimal("11")));
 
         assertEquals(1, fills.size());
         assertEquals("SELL", fills.get(0).side());
-        // 100×11=1100 进账，持仓清零
-        assertEquals(0, sb.getBalance().compareTo(new BigDecimal("1000100")));
+        // 998998.75 + 1098.08 = 1000096.83
+        assertEquals(0, sb.getBalance().compareTo(new BigDecimal("1000096.83")));
         assertNull(sb.position("000001"));
-        // 实现盈利 +100
         assertEquals(0, sb.equity(Map.of("000001", new BigDecimal("11")))
-                .compareTo(new BigDecimal("1000100")));
+                .compareTo(new BigDecimal("1000096.83")));
     }
 
     @Test
@@ -116,5 +121,21 @@ class BacktestSandboxTest {
         assertEquals(false, ok);
         assertEquals(0, sb.getFrozenBalance().compareTo(BigDecimal.ZERO));
         assertEquals(0, sb.getBalance().compareTo(new BigDecimal("500")));
+    }
+
+    @Test
+    void buy_limitUp_cancelled() {
+        // open=11 (>= 涨停 11.0)，BUY 应被涨跌停校验拒绝
+        BacktestSandbox sb = new BacktestSandbox(INIT);
+        sb.enqueueBuy("000001", 100, new BigDecimal("11"));
+
+        // prevClose=10, 涨停=11（主板 ±10%）；open=11 等于涨停
+        List<BacktestSandbox.Fill> fills = sb.settleAtOpen(
+                Map.of("000001", new BigDecimal("11")),
+                Map.of("000001", new BigDecimal("10")));
+
+        assertTrue(fills.isEmpty(), "涨停板 BUY 应拒绝");
+        assertEquals(0, sb.getBalance().compareTo(INIT));
+        assertEquals(0, sb.getFrozenBalance().compareTo(BigDecimal.ZERO));
     }
 }
