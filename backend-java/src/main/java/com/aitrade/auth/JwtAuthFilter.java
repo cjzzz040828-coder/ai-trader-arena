@@ -75,7 +75,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     /** SSE 端点路径白名单：这些端点允许通过 ?token= query 鉴权（EventSource 无法加 header）。 */
     private static boolean isSseEndpoint(String uri) {
         return uri.endsWith("/llm-stream")
-                || uri.endsWith("/llm-activity/stream");
+                || uri.endsWith("/llm-activity/stream")
+                || uri.endsWith("/analyst/stream");
     }
 
     private void writeUnauthorized(HttpServletResponse res, String msg) throws IOException {

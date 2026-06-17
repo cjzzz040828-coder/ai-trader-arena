@@ -6,6 +6,7 @@ import { useTradeStore } from '@/stores/trade'
 import OrderBook from '@/components/OrderBook.vue'
 import KLineChart from '@/components/KLineChart.vue'
 import MinuteChart from '@/components/MinuteChart.vue'
+import AnalystChat from '@/components/AnalystChat.vue'
 
 defineOptions({ name: 'Dashboard' })
 
@@ -536,6 +537,8 @@ onBeforeUnmount(() => {
             请先在顶部选择一个 trader
           </div>
         </el-card>
+
+        <AnalystChat :code="selectedCode" :stock-name="selectedSnap?.name" />
       </div>
     </div>
   </div>

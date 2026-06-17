@@ -20,6 +20,9 @@ services:
     restart: unless-stopped
     environment:
       - GATEWAY_PYTHON_BASE_URL=http://gateway-python:8000
+      - ANALYST_LLM_BASE_URL=${ANALYST_LLM_BASE_URL:-}
+      - ANALYST_LLM_API_KEY=${ANALYST_LLM_API_KEY:-}
+      - ANALYST_LLM_MODEL=${ANALYST_LLM_MODEL:-}
     volumes:
       - ./backend-java/data:/app/data
       - ./backend-java/logs:/app/logs
