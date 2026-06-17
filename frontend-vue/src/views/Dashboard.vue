@@ -541,7 +541,7 @@ onBeforeUnmount(() => {
         </el-card>
 
         <button class="analyst-trigger" :disabled="!selectedCode" @click="analystOpen = true">
-          🤖 AI 分析{{ selectedSnap?.name ? '：' + selectedSnap.name : '助手' }}
+          AI 分析{{ selectedSnap?.name ? '：' + selectedSnap.name : '助手' }}
         </button>
       </div>
     </div>
