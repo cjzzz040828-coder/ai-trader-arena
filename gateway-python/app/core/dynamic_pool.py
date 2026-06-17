@@ -231,16 +231,20 @@ def build_pool(pool_name: str = "default") -> dict[str, Any]:
         exclude_prev_day_limit_up = bool(rules.get("exclude_prev_day_limit_up", False))
         kline_filter_on = require_limit_up_in_days > 0 or require_low_above_ma > 0 or exclude_prev_day_limit_up
 
-        # 步骤 1：板块 + 名称过滤
+        # 步骤 1：板块 + 名称过滤（按 code 去重：全市场名表偶有重复条目，不去重会带到最终快照）
         step1: list[dict] = []
+        seen_codes: set[str] = set()
         for s in ALL_MARKET_STOCKS:
             code = s.get("code", "")
+            if code in seen_codes:
+                continue
             name = s.get("name") or STOCK_NAMES.get(code, code)
             seg = _classify(code)
             if not seg or seg not in markets_keep:
                 continue
             if _name_excluded(name, exclude_st, exclude_delisting):
                 continue
+            seen_codes.add(code)
             step1.append({"code": code, "name": name, "market": s.get("market"), "segment": seg})
         logger.info(f"[pool:{pool_name}] step1 板块+ST 过滤后 {len(step1)} 只")
 
