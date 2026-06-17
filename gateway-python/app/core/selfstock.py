@@ -136,7 +136,7 @@ def _load_by_pool(pool_name: str | None = None) -> tuple[list[dict], dict[str, l
             continue
         records.append({
             "code": code,
-            "name": s.get("name") or STOCK_NAMES.get(code, code),
+            "name": (s.get("name") or STOCK_NAMES.get(code, code)).strip().strip("\x00").strip(),
             "market": s.get("market") or ("SH" if code[0] in ("5", "6", "9") else "SZ"),
             "added_price": s.get("price", 0),
             "added_date": (data.get("updated_at") or "")[:10],
