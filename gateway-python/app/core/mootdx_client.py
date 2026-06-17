@@ -141,7 +141,7 @@ class MootdxClient:
                     continue
                 for _, row in df.iterrows():
                     code = str(row.get("code", "")).zfill(6)
-                    name = str(row.get("name", "")).strip()
+                    name = str(row.get("name", "")).strip().strip("\x00").strip()
                     if not code or not code.isdigit():
                         continue
                     if name and code not in STOCK_NAMES:
