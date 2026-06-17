@@ -575,11 +575,11 @@ onBeforeUnmount(() => {
 .col.right {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
 }
 .ob-wrap {
-  flex: 1;
-  min-height: 0;
+  flex: none;
+  height: 360px;
   display: flex;
   flex-direction: column;
 }

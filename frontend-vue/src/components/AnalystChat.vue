@@ -166,7 +166,7 @@ function clearChat() {
 }
 .analyst-head .clr:hover { color: var(--brand-up); }
 
-.msg-list { height: 320px; overflow-y: auto; padding: 12px 14px; }
+.msg-list { height: 260px; overflow-y: auto; padding: 12px 14px; }
 .empty { color: var(--brand-text-placeholder); font-size: 13px; text-align: center; padding-top: 24px; }
 .empty .quick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
 .empty .quick button {
