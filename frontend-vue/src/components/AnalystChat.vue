@@ -1,8 +1,23 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 defineOptions({ name: 'AnalystChat' })
+
+marked.setOptions({ breaks: true, gfm: true })
+
+/** 把 LLM 的 markdown 渲染成安全 HTML（流式过程中也能渲染，未闭合标记容忍）。 */
+function renderMarkdown(text: string): string {
+  if (!text) return ''
+  try {
+    const html = marked.parse(text, { async: false }) as string
+    return DOMPurify.sanitize(html)
+  } catch {
+    return DOMPurify.sanitize(text)
+  }
+}
 
 const props = defineProps<{
   code: string | null
@@ -110,7 +125,12 @@ function clearChat() {
       </div>
       <div v-for="(m, i) in messages" :key="i" :class="['bubble', m.role]">
         <div class="role">{{ m.role === 'user' ? '我' : 'AI' }}</div>
-        <div class="content">{{ m.content || (streaming && i === messages.length - 1 ? '思考中…' : '') }}</div>
+        <div
+          v-if="m.role === 'assistant'"
+          class="content md"
+          v-html="m.content ? renderMarkdown(m.content) : (streaming && i === messages.length - 1 ? '<span class=&quot;thinking&quot;>思考中…</span>' : '')"
+        ></div>
+        <div v-else class="content">{{ m.content }}</div>
       </div>
     </div>
 
@@ -166,6 +186,37 @@ function clearChat() {
   background: var(--brand-bg-soft, #f5f6f8); border-radius: 8px; padding: 8px 10px;
 }
 .bubble.user .content { background: var(--brand-primary-soft, rgba(59,130,246,.10)); }
+
+/* markdown 渲染样式（v-html 内容用 :deep 穿透 scoped） */
+.content.md { white-space: normal; }
+.content.md :deep(h1),
+.content.md :deep(h2),
+.content.md :deep(h3),
+.content.md :deep(h4) {
+  font-size: 14px; font-weight: 700; margin: 10px 0 4px;
+  color: var(--brand-text-primary); line-height: 1.4;
+}
+.content.md :deep(h1):first-child,
+.content.md :deep(h2):first-child,
+.content.md :deep(h3):first-child { margin-top: 0; }
+.content.md :deep(p) { margin: 4px 0; }
+.content.md :deep(ul),
+.content.md :deep(ol) { margin: 4px 0; padding-left: 18px; }
+.content.md :deep(li) { margin: 2px 0; }
+.content.md :deep(strong) { color: var(--brand-text-primary); font-weight: 700; }
+.content.md :deep(code) {
+  background: rgba(0,0,0,.06); border-radius: 3px; padding: 1px 4px;
+  font-family: 'Consolas', monospace; font-size: 12px;
+}
+.content.md :deep(hr) { border: none; border-top: 1px solid var(--brand-border, #e5e7eb); margin: 8px 0; }
+.content.md :deep(table) { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+.content.md :deep(th),
+.content.md :deep(td) { border: 1px solid var(--brand-border, #e5e7eb); padding: 3px 8px; }
+.content.md :deep(.thinking) { color: var(--brand-text-placeholder); }
+.content.md :deep(blockquote) {
+  margin: 4px 0; padding-left: 10px; border-left: 3px solid var(--brand-border, #e5e7eb);
+  color: var(--brand-text-secondary);
+}
 
 .input-row {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--brand-border, #e5e7eb);
