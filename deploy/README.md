@@ -4,7 +4,7 @@
 
 ## 目标服务器
 
-- 默认：`root@8.137.119.18`（成都阿里云，可被环境变量 `AITRADE_SERVER` 覆盖）
+- 默认：`root@1.14.144.236`（腾讯云 Ubuntu 22.04，4核/3.7G，可被环境变量 `AITRADE_SERVER` 覆盖）
 - 目标目录：`/opt/aitrade/`（可被 `AITRADE_REMOTE_DIR` 覆盖）
 
 ## 架构
@@ -25,7 +25,7 @@ host:80 (nginx 容器)
 - ✅ Maven（`mvn -v`）
 - ✅ npm（`npm -v`）
 - ✅ ssh + tar（git-bash 自带）
-- ✅ SSH key 已加到服务器 `~/.ssh/authorized_keys`（验证：`ssh -o BatchMode=yes root@8.137.119.18 echo ok`）
+- ✅ SSH key 已加到服务器 `~/.ssh/authorized_keys`（验证：`ssh -o BatchMode=yes root@1.14.144.236 echo ok`）
 
 ### 服务器
 
@@ -51,7 +51,7 @@ bash deploy/deploy.sh
 4. tar over ssh 流式上传到 `/opt/aitrade/`
 5. ssh 触发 `docker compose up -d --build`
 
-完成后浏览器打开 `http://8.137.119.18/`。
+完成后浏览器打开 `http://1.14.144.236/`。
 
 ## 内存预算
 
@@ -68,32 +68,32 @@ bash deploy/deploy.sh
 
 ```bash
 # 看服务状态
-ssh root@8.137.119.18 'cd /opt/aitrade && docker compose ps'
+ssh root@1.14.144.236 'cd /opt/aitrade && docker compose ps'
 
 # 看实时日志
-ssh root@8.137.119.18 'cd /opt/aitrade && docker compose logs -f --tail=100'
+ssh root@1.14.144.236 'cd /opt/aitrade && docker compose logs -f --tail=100'
 
 # 单独看某个服务的日志
-ssh root@8.137.119.18 'cd /opt/aitrade && docker compose logs -f backend-java'
+ssh root@1.14.144.236 'cd /opt/aitrade && docker compose logs -f backend-java'
 
 # 看资源占用
-ssh root@8.137.119.18 'docker stats --no-stream'
+ssh root@1.14.144.236 'docker stats --no-stream'
 
 # 重启某个服务
-ssh root@8.137.119.18 'cd /opt/aitrade && docker compose restart backend-java'
+ssh root@1.14.144.236 'cd /opt/aitrade && docker compose restart backend-java'
 
 # 停止所有
-ssh root@8.137.119.18 'cd /opt/aitrade && docker compose down'
+ssh root@1.14.144.236 'cd /opt/aitrade && docker compose down'
 
 # 看 SQLite 数据库大小
-ssh root@8.137.119.18 'ls -lh /opt/aitrade/backend-java/data/aitrade.db'
+ssh root@1.14.144.236 'ls -lh /opt/aitrade/backend-java/data/aitrade.db'
 ```
 
 ## 数据备份
 
 ```bash
 # 把服务器数据库拷回本地
-scp root@8.137.119.18:/opt/aitrade/backend-java/data/aitrade.db ./backup-$(date +%Y%m%d).db
+scp root@1.14.144.236:/opt/aitrade/backend-java/data/aitrade.db ./backup-$(date +%Y%m%d).db
 ```
 
 ## 故障排查
@@ -101,7 +101,7 @@ scp root@8.137.119.18:/opt/aitrade/backend-java/data/aitrade.db ./backup-$(date 
 ### 容器起不来
 
 ```bash
-ssh root@8.137.119.18 'cd /opt/aitrade && docker compose logs <service>'
+ssh root@1.14.144.236 'cd /opt/aitrade && docker compose logs <service>'
 ```
 
 ### Java 内存溢出（OOMKilled）
@@ -112,7 +112,7 @@ ssh root@8.137.119.18 'cd /opt/aitrade && docker compose logs <service>'
 
 ```bash
 # 进 gateway 容器手动测
-ssh root@8.137.119.18 'docker exec -it aitrade-gateway curl -s http://push2.eastmoney.com/api/qt/stock/get?secid=1.600519 | head -c 200'
+ssh root@1.14.144.236 'docker exec -it aitrade-gateway curl -s http://push2.eastmoney.com/api/qt/stock/get?secid=1.600519 | head -c 200'
 ```
 
 ### SSE 实时事件断流

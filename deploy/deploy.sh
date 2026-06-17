@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-SERVER="${AITRADE_SERVER:-root@8.137.119.18}"
+SERVER="${AITRADE_SERVER:-root@1.14.144.236}"
 REMOTE_DIR="${AITRADE_REMOTE_DIR:-/opt/aitrade}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
