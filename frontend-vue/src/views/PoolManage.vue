@@ -32,6 +32,9 @@ const form = reactive({
   max_price: 50,
   min_market_cap_yi: 20,    // 单位：亿元
   max_market_cap_yi: 500,
+  require_limit_up_in_days: 7,
+  require_low_above_ma: 30,
+  exclude_prev_day_limit_up: true,
   autoRefresh: true
 })
 
@@ -77,6 +80,9 @@ function openCreate() {
   form.max_price = 50
   form.min_market_cap_yi = 20
   form.max_market_cap_yi = 500
+  form.require_limit_up_in_days = 7
+  form.require_low_above_ma = 30
+  form.exclude_prev_day_limit_up = true
   form.autoRefresh = true
   dialogOpen.value = true
 }
@@ -92,6 +98,9 @@ function openEdit(p: PoolDefinition) {
   form.max_price = p.rules.max_price
   form.min_market_cap_yi = (p.rules.min_market_cap || 0) / 1e8
   form.max_market_cap_yi = (p.rules.max_market_cap || 0) / 1e8
+  form.require_limit_up_in_days = p.rules.require_limit_up_in_days ?? 7
+  form.require_low_above_ma = p.rules.require_low_above_ma ?? 30
+  form.exclude_prev_day_limit_up = p.rules.exclude_prev_day_limit_up !== false
   form.autoRefresh = p.autoRefresh !== false
   dialogOpen.value = true
 }
@@ -123,7 +132,10 @@ async function submit() {
     min_price: form.min_price,
     max_price: form.max_price,
     min_market_cap: form.min_market_cap_yi * 1e8,
-    max_market_cap: form.max_market_cap_yi * 1e8
+    max_market_cap: form.max_market_cap_yi * 1e8,
+    require_limit_up_in_days: form.require_limit_up_in_days,
+    require_low_above_ma: form.require_low_above_ma,
+    exclude_prev_day_limit_up: form.exclude_prev_day_limit_up
   }
   submitting.value = true
   try {
@@ -233,7 +245,19 @@ function rulesSummary(p: PoolDefinition): string {
   const r = p.rules
   const mkt = (r.markets || []).map(m => MARKETS.find(x => x.key === m)?.key.replace('MAIN_', '') || m).join('/')
   const cap = `${(r.min_market_cap / 1e8).toFixed(0)}-${(r.max_market_cap / 1e8).toFixed(0)}亿`
-  return `${mkt} · 价 ${r.min_price}-${r.max_price} · 市值 ${cap}`
+  const parts = [`${mkt} · 价 ${r.min_price}-${r.max_price} · 市值 ${cap}`]
+  const tech: string[] = []
+  if (r.require_limit_up_in_days) tech.push(`近${r.require_limit_up_in_days}日涨停`)
+  if (r.require_low_above_ma) tech.push(`最低>MA${r.require_low_above_ma}`)
+  if (r.exclude_prev_day_limit_up) tech.push('前日未涨停')
+  if (tech.length) parts.push(tech.join('·'))
+  return parts.join(' | ')
+}
+
+// 当日最低价 > MA30 时标红（A股红=强势站上均线）
+function lowVsMaClass(row: PoolStockEntry): string {
+  if (row.last_low == null || row.ma30 == null) return ''
+  return row.last_low > row.ma30 ? 'low-above-ma' : ''
 }
 
 function statusBadge(name: string): { text: string; type: 'success' | 'info' | 'warning' | 'danger' } {
@@ -339,6 +363,18 @@ onMounted(() => {
           <span style="margin: 0 6px;">~</span>
           <el-input-number v-model="form.max_market_cap_yi" :min="0" :max="100000" :step="10" :precision="0" /> 亿
         </el-form-item>
+        <el-form-item label="近 N 日涨停">
+          <el-input-number v-model="form.require_limit_up_in_days" :min="0" :max="60" :step="1" :precision="0" /> 个交易日内须有过涨停
+          <span class="form-hint">0 = 不限制；涨幅 ≥ 9.8% 算涨停（主板）</span>
+        </el-form-item>
+        <el-form-item label="最低价站上">
+          MA <el-input-number v-model="form.require_low_above_ma" :min="0" :max="250" :step="1" :precision="0" />
+          <span class="form-hint">当日最低价 &gt; 当日 N 日均线；0 = 不检查</span>
+        </el-form-item>
+        <el-form-item label="前一日不涨停">
+          <el-switch v-model="form.exclude_prev_day_limit_up" />
+          <span class="form-hint">排除前一交易日已涨停的股票（避免追高）</span>
+        </el-form-item>
         <el-form-item label="自动重建">
           <el-switch v-model="form.autoRefresh" />
           <span class="form-hint">开启后每周五 15:30 自动重建快照</span>
@@ -367,16 +403,38 @@ onMounted(() => {
     </el-dialog>
 
     <!-- ========== 快照详情（具体股票列表） ========== -->
-    <el-dialog v-model="snapshotDialogOpen" :title="`${snapshotPoolName} · ${snapshotDate} · ${snapshotCodes.length} 只`" width="720px">
-      <el-table :data="snapshotCodes" v-loading="snapshotLoading" max-height="500" stripe size="small">
-        <el-table-column prop="code" label="代码" width="90" />
-        <el-table-column prop="name" label="名称" width="120" />
-        <el-table-column prop="segment" label="板块" width="100" />
-        <el-table-column label="价格" width="90" align="right">
+    <el-dialog v-model="snapshotDialogOpen" :title="`${snapshotPoolName} · ${snapshotDate} · ${snapshotCodes.length} 只`" width="920px">
+      <el-table :data="snapshotCodes" v-loading="snapshotLoading" max-height="540" stripe size="small">
+        <el-table-column prop="code" label="代码" width="78" />
+        <el-table-column prop="name" label="名称" width="100" />
+        <el-table-column prop="segment" label="板块" width="84" />
+        <el-table-column label="价格" width="76" align="right">
           <template #default="{ row }">{{ row.price?.toFixed(2) ?? '-' }}</template>
         </el-table-column>
-        <el-table-column label="流通市值（亿）" align="right">
+        <el-table-column label="市值(亿)" width="90" align="right">
           <template #default="{ row }">{{ row.liutongshizhi != null ? (row.liutongshizhi / 1e8).toFixed(2) : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="当日最低" width="84" align="right">
+          <template #default="{ row }">
+            <span :class="lowVsMaClass(row)">{{ row.last_low != null ? row.last_low.toFixed(2) : '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="MA30" width="84" align="right">
+          <template #default="{ row }">{{ row.ma30 != null ? row.ma30.toFixed(2) : '-' }}</template>
+        </el-table-column>
+        <el-table-column label="近7日涨停" min-width="160">
+          <template #default="{ row }">
+            <template v-if="row.limit_up_days && row.limit_up_days.length">
+              <el-tag v-for="d in row.limit_up_days" :key="d" size="small" class="lu-tag">{{ (d || '').slice(5) }}</el-tag>
+            </template>
+            <span v-else class="muted">无</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="前一日涨停" width="96" align="center">
+          <template #default="{ row }">
+            <el-tag v-if="row.prev_day_limit_up" type="warning" size="small">涨停</el-tag>
+            <span v-else class="muted">否</span>
+          </template>
         </el-table-column>
       </el-table>
     </el-dialog>
@@ -395,4 +453,7 @@ onMounted(() => {
 .slug { font-size: 11px; color: var(--brand-text-secondary); font-family: monospace; }
 .snapshot-link { color: var(--brand-primary); cursor: pointer; text-decoration: none; }
 .snapshot-link:hover { text-decoration: underline; }
+.low-above-ma { color: var(--brand-up); font-weight: 600; }
+.muted { color: var(--brand-text-placeholder); }
+.lu-tag { margin: 1px 3px 1px 0; }
 </style>

@@ -125,6 +125,82 @@ def _fetch_liutong(client, code: str) -> float:
         return 0.0
 
 
+# 主板涨停阈值。用 9.8% 而非 10% 是给四舍五入/价格步进留余量（如 11.0×1.1=12.1 精确，
+# 但部分票收盘价与理论涨停价有 1 分钱误差，9.8% 能稳稳覆盖真实涨停）。
+LIMIT_UP_PCT = 0.098
+
+
+def _compute_kline_metrics(bars: list[dict], ma_period: int = 30) -> dict:
+    """从日 K（按时间升序，末尾最新）算技术指标。
+
+    返回：
+      ma30: 最近 ma_period 根 close 均值（不足返回 None；键名固定 ma30 供前端展示）
+      ma_period: 实际用的均线周期
+      last_low: 最新交易日最低价
+      last_date: 最新交易日（YYYY-MM-DD）
+      limit_up_days: 近 7 个交易日中涨停的日期列表
+      prev_day_limit_up: 前一交易日是否涨停
+    涨停判定：(close - 前收) / 前收 ≥ LIMIT_UP_PCT，前收取相邻前一根 close。
+    """
+    rows = [b for b in (bars or []) if b and b.get("close")]
+    if not rows:
+        return {}
+
+    closes = [float(b["close"]) for b in rows]
+    last = rows[-1]
+    last_date = str(last.get("datetime", ""))[:10]
+
+    ma_n = max(1, int(ma_period or 30))
+    ma30 = round(sum(closes[-ma_n:]) / ma_n, 3) if len(closes) >= ma_n else None
+
+    # 逐根算涨幅（首根无前收，跳过）
+    limit_up_flags: list[tuple[str, bool]] = []
+    for i in range(1, len(rows)):
+        prev_close = closes[i - 1]
+        if prev_close <= 0:
+            limit_up_flags.append((str(rows[i].get("datetime", ""))[:10], False))
+            continue
+        pct = (closes[i] - prev_close) / prev_close
+        limit_up_flags.append((str(rows[i].get("datetime", ""))[:10], pct >= LIMIT_UP_PCT))
+
+    recent7 = limit_up_flags[-7:]
+    limit_up_days = [d for d, up in recent7 if up]
+    # 前一交易日 = 倒数第二根
+    prev_day_limit_up = bool(limit_up_flags[-2][1]) if len(limit_up_flags) >= 2 else False
+
+    return {
+        "ma30": ma30,
+        "ma_period": ma_n,
+        "last_low": round(float(last.get("low") or 0), 3),
+        "last_date": last_date,
+        "limit_up_days": limit_up_days,
+        "prev_day_limit_up": prev_day_limit_up,
+    }
+
+
+def _passes_kline_rules(metrics: dict, rules: dict) -> bool:
+    """按 3 条技术规则判定。规则值为 0 / False 表示不检查该项。"""
+    if not metrics:
+        return False
+
+    need_days = int(rules.get("require_limit_up_in_days", 0) or 0)
+    if need_days > 0 and not metrics.get("limit_up_days"):
+        return False
+
+    ma_n = int(rules.get("require_low_above_ma", 0) or 0)
+    if ma_n > 0:
+        ma = metrics.get("ma30")
+        last_low = metrics.get("last_low")
+        if ma is None or last_low is None or last_low <= ma:
+            return False
+
+    if rules.get("exclude_prev_day_limit_up", False) and metrics.get("prev_day_limit_up"):
+        return False
+
+    return True
+
+
+
 def build_pool(pool_name: str = "default") -> dict[str, Any]:
     """按 pool_registry 里的规则构建指定池子。约 60-120 秒，串行执行。"""
     pool_def = pool_registry.get_pool(pool_name)
@@ -150,6 +226,10 @@ def build_pool(pool_name: str = "default") -> dict[str, Any]:
         max_price = float(rules["max_price"])
         min_cap = float(rules["min_market_cap"])
         max_cap = float(rules["max_market_cap"])
+        require_limit_up_in_days = int(rules.get("require_limit_up_in_days", 0) or 0)
+        require_low_above_ma = int(rules.get("require_low_above_ma", 0) or 0)
+        exclude_prev_day_limit_up = bool(rules.get("exclude_prev_day_limit_up", False))
+        kline_filter_on = require_limit_up_in_days > 0 or require_low_above_ma > 0 or exclude_prev_day_limit_up
 
         # 步骤 1：板块 + 名称过滤
         step1: list[dict] = []
@@ -194,6 +274,32 @@ def build_pool(pool_name: str = "default") -> dict[str, Any]:
         logger.info(
             f"[pool:{pool_name}] step3 流通市值 [{min_cap / 1e8:.0f}亿, {max_cap / 1e8:.0f}亿] 过滤后 {len(survivors)} 只"
         )
+        step3_count = len(survivors)
+
+        # 步骤 4：K 线技术过滤（近 N 日涨停 / 当日最低>MA / 前一日未涨停）。
+        # 只对 step3 幸存者逐只拉日 K，规则全关时跳过整步。
+        if kline_filter_on:
+            ma_period = require_low_above_ma or 30
+            kline_survivors: list[dict] = []
+            with mootdx_client._client_lock:
+                client = mootdx_client._client
+                for i, s in enumerate(survivors):
+                    bars = mootdx_client.bars(s["code"], frequency=9, count=max(40, ma_period + 10))
+                    metrics = _compute_kline_metrics(bars, ma_period=ma_period)
+                    if _passes_kline_rules(metrics, rules):
+                        s["ma30"] = metrics.get("ma30")
+                        s["last_low"] = metrics.get("last_low")
+                        s["last_date"] = metrics.get("last_date")
+                        s["limit_up_days"] = metrics.get("limit_up_days")
+                        s["prev_day_limit_up"] = metrics.get("prev_day_limit_up")
+                        kline_survivors.append(s)
+                    if (i + 1) % 200 == 0:
+                        logger.info(f"[pool:{pool_name}] step4 进度 {i + 1}/{len(survivors)}, 已入选 {len(kline_survivors)}")
+            survivors = kline_survivors
+            logger.info(
+                f"[pool:{pool_name}] step4 K线过滤(近{require_limit_up_in_days}日涨停/最低>MA{ma_period}/"
+                f"前日未涨停={exclude_prev_day_limit_up}) 后 {len(survivors)} 只"
+            )
 
         result = {
             "pool_name": pool_name,
@@ -203,7 +309,8 @@ def build_pool(pool_name: str = "default") -> dict[str, Any]:
             "stats": {
                 "step1_after_market_filter": len(step1),
                 "step2_after_price_filter": len(step2),
-                "step3_after_mktcap_filter": len(survivors),
+                "step3_after_mktcap_filter": step3_count,
+                "step4_after_kline_filter": len(survivors) if kline_filter_on else None,
                 "elapsed_seconds": round(time.time() - t0, 1),
             },
             "codes": survivors,

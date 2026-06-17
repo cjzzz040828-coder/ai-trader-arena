@@ -402,6 +402,9 @@ export interface PoolRules {
   max_price: number
   min_market_cap: number
   max_market_cap: number
+  require_limit_up_in_days?: number
+  require_low_above_ma?: number
+  exclude_prev_day_limit_up?: boolean
 }
 
 export interface PoolDefinition {
@@ -420,12 +423,18 @@ export interface PoolStockEntry {
   price?: number
   liutongshizhi?: number
   liutongguben?: number
+  ma30?: number | null
+  last_low?: number
+  last_date?: string
+  limit_up_days?: string[]
+  prev_day_limit_up?: boolean
 }
 
 export interface PoolSnapshotStats {
   step1_after_market_filter: number
   step2_after_price_filter: number
   step3_after_mktcap_filter: number
+  step4_after_kline_filter?: number | null
   elapsed_seconds: number
 }
 

@@ -56,6 +56,9 @@ def _default_rules_from_settings() -> dict:
         "max_price": float(settings.pool_max_price),
         "min_market_cap": float(settings.pool_min_market_cap),
         "max_market_cap": float(settings.pool_max_market_cap),
+        "require_limit_up_in_days": 7,
+        "require_low_above_ma": 30,
+        "exclude_prev_day_limit_up": True,
     }
 
 
@@ -84,6 +87,15 @@ def _validate_name(name: str) -> None:
         raise ValueError("池子 name 必须是 1-32 位小写字母/数字/下划线/横线，首位字母数字")
 
 
+def _safe_int(val: Any, default: int) -> int:
+    """转非负 int，非法值（负数/无法解析）回落 default。"""
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return default
+    return n if n >= 0 else default
+
+
 def _validate_rules(rules: Any) -> dict:
     if not isinstance(rules, dict):
         raise ValueError("rules 必须是 object")
@@ -95,6 +107,9 @@ def _validate_rules(rules: Any) -> dict:
         "max_price": float(rules.get("max_price", 0)),
         "min_market_cap": float(rules.get("min_market_cap", 0)),
         "max_market_cap": float(rules.get("max_market_cap", 0)),
+        "require_limit_up_in_days": _safe_int(rules.get("require_limit_up_in_days", 7), default=7),
+        "require_low_above_ma": _safe_int(rules.get("require_low_above_ma", 30), default=30),
+        "exclude_prev_day_limit_up": bool(rules.get("exclude_prev_day_limit_up", True)),
     }
     valid_markets = {"MAIN_SH", "MAIN_SZ", "SME", "GEM", "STAR"}
     out["markets"] = [m.upper() for m in out["markets"] if isinstance(m, str) and m.upper() in valid_markets]
