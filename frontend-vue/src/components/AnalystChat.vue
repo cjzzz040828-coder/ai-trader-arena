@@ -150,7 +150,7 @@ function clearChat() {
 </template>
 
 <style scoped>
-.analyst-card { margin-top: 12px; display: flex; flex-direction: column; }
+.analyst-card { display: flex; flex-direction: column; }
 .analyst-head {
   display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; border-bottom: 1px solid var(--brand-border, #e5e7eb);
@@ -166,7 +166,7 @@ function clearChat() {
 }
 .analyst-head .clr:hover { color: var(--brand-up); }
 
-.msg-list { height: 260px; overflow-y: auto; padding: 12px 14px; }
+.msg-list { height: 400px; overflow-y: auto; padding: 12px 14px; }
 .empty { color: var(--brand-text-placeholder); font-size: 13px; text-align: center; padding-top: 24px; }
 .empty .quick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
 .empty .quick button {

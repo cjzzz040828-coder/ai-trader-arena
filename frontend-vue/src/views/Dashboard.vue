@@ -21,6 +21,8 @@ const dashboardTrader = computed(() =>
 const orderPrice = ref<number>(0)
 const orderAmount = ref<number>(100)
 const submitting = ref(false)
+// ---------- AI 分析助手弹窗 ----------
+const analystOpen = ref(false)
 const canSubmit = computed(() =>
   !!dashboardTraderId.value
   && !!selectedCode.value
@@ -538,9 +540,23 @@ onBeforeUnmount(() => {
           </div>
         </el-card>
 
-        <AnalystChat :code="selectedCode" :stock-name="selectedSnap?.name" />
+        <button class="analyst-trigger" :disabled="!selectedCode" @click="analystOpen = true">
+          🤖 AI 分析{{ selectedSnap?.name ? '：' + selectedSnap.name : '助手' }}
+        </button>
       </div>
     </div>
+
+    <el-dialog
+      v-model="analystOpen"
+      :title="`AI 分析助手${selectedSnap?.name ? ' · ' + selectedSnap.name + ' ' + selectedCode : ''}`"
+      width="640px"
+      top="6vh"
+      :close-on-click-modal="false"
+      append-to-body
+      class="analyst-dialog"
+    >
+      <AnalystChat :code="selectedCode" :stock-name="selectedSnap?.name" />
+    </el-dialog>
   </div>
 </template>
 
@@ -575,14 +591,28 @@ onBeforeUnmount(() => {
 .col.right {
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden;
 }
 .ob-wrap {
-  flex: none;
-  height: 360px;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
+.analyst-trigger {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--brand-primary);
+  background: var(--brand-primary-soft, rgba(59,130,246,.08));
+  color: var(--brand-primary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background .15s;
+}
+.analyst-trigger:hover:not(:disabled) { background: var(--brand-primary); color: #fff; }
+.analyst-trigger:disabled { opacity: .5; cursor: not-allowed; }
 .col-title {
   padding: 10px 14px;
   font-weight: 600;
