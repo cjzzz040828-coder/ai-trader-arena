@@ -7,6 +7,7 @@ akshare 本质是对东方财富/财联社公开页面的封装, 字段名偶尔
 from __future__ import annotations
 
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -22,10 +23,30 @@ _STOCK_NEWS_TTL = 30 * 60     # 个股新闻 30 分钟缓存 (新闻更新频率
 _CLS_TTL = 5 * 60             # 财联社电报 5 分钟缓存 (情绪流要新鲜)
 _STOCK_NEWS_MAX = 512         # 缓存最多 512 只股票
 _CLS_MAX = 4                  # 财联社只缓存 "全部" / "重点"
+_AKSHARE_TIMEOUT = 15         # akshare 单次调用超时（秒）。akshare 内部 HTTP 不设超时，
+                              # 财联社接口曾整体挂起拖死新闻请求，必须外层兜超时。
 
 _stock_news_cache: TTLCache = TTLCache(maxsize=_STOCK_NEWS_MAX, ttl=_STOCK_NEWS_TTL)
 _cls_cache: TTLCache = TTLCache(maxsize=_CLS_MAX, ttl=_CLS_TTL)
 _lock = threading.Lock()
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="akshare")
+
+
+def _call_with_timeout(fn, label: str, timeout: int = _AKSHARE_TIMEOUT):
+    """在独立线程里跑 akshare 调用并兜超时。挂起/异常都返回 None（调用方自行回退/降级）。
+
+    注意：超时只是让调用方不再等待，挂起的线程仍在后台跑（akshare HTTP 无法强制中断），
+    但 ThreadPoolExecutor 上限 2，最坏情况是占用 2 个线程，不影响主服务。
+    """
+    fut = _executor.submit(fn)
+    try:
+        return fut.result(timeout=timeout)
+    except FutureTimeout:
+        logger.warning(f"[news] {label} timed out after {timeout}s")
+        return None
+    except Exception as e:
+        logger.warning(f"[news] {label} failed: {type(e).__name__}: {e}")
+        return None
 
 
 def _norm_str(v: Any) -> str:
@@ -75,10 +96,8 @@ def fetch_stock_news(code: str, limit: int = 10) -> List[Dict[str, str]]:
         cached = _stock_news_cache.get(cache_key)
         if cached is not None:
             return cached[:limit]
-        try:
-            df = ak.stock_news_em(symbol=code)
-        except Exception as e:
-            logger.warning(f"[news] stock_news_em({code}) failed: {type(e).__name__}: {e}")
+        df = _call_with_timeout(lambda: ak.stock_news_em(symbol=code), f"stock_news_em({code})")
+        if df is None:
             _stock_news_cache[cache_key] = []
             return []
 
@@ -115,22 +134,32 @@ def fetch_cls_telegraph(symbol: str = "全部", limit: int = 30) -> List[Dict[st
         cached = _cls_cache.get(cache_key)
         if cached is not None:
             return cached[:limit]
-        try:
-            df = ak.stock_info_global_cls(symbol=symbol)
-        except Exception as e:
-            logger.warning(f"[news] stock_info_global_cls({symbol}) failed: {type(e).__name__}: {e}")
+
+        # 主源：财联社电报。akshare 该接口曾整体挂起，用线程超时兜底。
+        df = _call_with_timeout(lambda: ak.stock_info_global_cls(symbol=symbol), f"stock_info_global_cls({symbol})")
+        source_label = "财联社"
+        # 回退：财联社挂起/失败时改用东财全球快讯（约 200 条，列：标题/摘要/发布时间/链接）。
+        if df is None or getattr(df, "empty", True):
+            logger.info("[news] cls unavailable, falling back to stock_info_global_em (东财全球快讯)")
+            df = _call_with_timeout(ak.stock_info_global_em, "stock_info_global_em(fallback)")
+            source_label = "东财快讯"
+
+        if df is None:
             _cls_cache[cache_key] = []
             return []
 
         items: List[Dict[str, str]] = []
         try:
             for _, row in df.iterrows():
-                items.append(_row_to_news(row.to_dict()))
+                item = _row_to_news(row.to_dict())
+                if not item.get("source"):
+                    item["source"] = source_label
+                items.append(item)
         except Exception as e:
-            logger.warning(f"[news] parse stock_info_global_cls failed: {e}")
+            logger.warning(f"[news] parse cls/fallback failed: {e}")
 
         _cls_cache[cache_key] = items
-        logger.info(f"[news] stock_info_global_cls({symbol}) -> {len(items)} items")
+        logger.info(f"[news] cls telegraph ({source_label}, symbol={symbol}) -> {len(items)} items")
         return items[:limit]
 
 
