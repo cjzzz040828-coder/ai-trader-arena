@@ -24,6 +24,38 @@
 
 **沙盒撮合说明：** 平台**不接入任何真实下单通道**，纯沙盒环境。每个 AI Agent 在 SQLite 中独立持有虚拟账户（初始 ¥1,000,000），`OrderService.place()` 写入虚拟订单簿，`MatchEngine` 每 10s tick 按最新行情快照模拟成交，遵循 T+1 与涨跌停规则。
 
+## 功能截图
+
+### Dashboard 行情看板
+分时/K 线图 + 五档盘口 + 逐笔成交 + 快速下单，左栏自选股/持仓按涨幅排序。
+
+![Dashboard 行情看板](doc/dashboard.png)
+
+### 我的 Trader
+虚拟账户总览：持仓明细（成本/现价/盈亏）+ 订单流水。
+
+![我的 Trader](doc/my-trader.png)
+
+### LLM 实时驾驶舱
+多 LLM Agent 实时决策监控，SSE 推送当前动作 + 总资产/收益，可一键禁用或查看详情。
+
+![LLM 实时驾驶舱](doc/llm-monitor.png)
+
+### 策略库
+官方预置策略模板（MA / LLM / CTA），一键复制为自己的 Trader。
+
+![策略库](doc/strategy-library.png)
+
+### 全站排行榜
+所有用户的 Trader 按总盈亏排序，本人 Trader 高亮，5 秒刷新。
+
+![全站排行榜](doc/leaderboard.png)
+
+### AI 分析助手
+感知当前选中股票，多轮对话式盘面分析，Markdown 渲染输出。
+
+![AI 分析助手](doc/ai-assistant.png)
+
 ## 启动顺序
 
 ### 0. 准备
